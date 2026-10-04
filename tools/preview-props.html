@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Emberwheel Props Preview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #0d0b16; --fg: #e8dcc0; --muted: #8a80a8; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; }
+  header { padding: 10px 16px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  header a { color: var(--muted); text-decoration: none; }
+  header a.on { color: #ffd257; }
+  canvas { display: block; }
+  #dom { padding: 8px 16px 24px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #dom .tile { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 40% 35%, #4a3550, #1a1222); border: 2px solid #c9953b; box-shadow: 0 0 10px rgba(255,190,100,0.25); }
+  #dom .card { width: 86px; height: 86px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #33243c, #1e1426); border: 2px solid #5a4632; }
+  #dom .ev { border-radius: 12px; background: rgba(14,10,22,0.95); border: 2px solid #c9953b; padding: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>EMBERWHEEL — relics &amp; event props preview</strong>
+  <a href="?s=all">all</a><a href="?s=relics">relics</a><a href="?s=events">events</a><a href="?s=misc">chisel &amp; stairs</a>
+  <span style="color:var(--muted)">(?s=…&amp;z=2 zooms; &amp;t=seconds freezes time; &amp;cmp=1 also loads device.js for a door comparison; &amp;vx=&amp;vy= crop)</span>
+</header>
+<canvas id="c"></canvas>
+<div id="dom"></div>
+<script src="../js/art/art_core.js"></script>
+<script src="../js/art/props.js"></script>
+<script>
+(function () {
+  const q = new URLSearchParams(location.search);
+  if (q.get('cmp') === '1' && !window.__cmpLoaded) {
+    window.__cmpLoaded = true;
+    const s = document.createElement('script'); s.src = '../js/art/device.js'; s.onload = start; s.onerror = start; document.head.appendChild(s);
+  } else start();
+
+  function start() {
+    const Art = SD.Art;
+    const sec = q.get('s') || 'all', zoom = +q.get('z') || 1, freeze = q.get('t');
+    document.querySelectorAll('header a').forEach(a => { if (a.getAttribute('href') === '?s=' + sec) a.classList.add('on'); });
+    const NAMES = { whetstone: '砥石', flint: '火打ち石', holywater: '聖水', buckler: '樫の小盾', hourglass: '砂時計', catbell: '黒猫の鈴', twinring: '双子の指輪',
+      fang: '吸血の牙', candelabra: '燭台', mirror: '割れた鏡', ironheart: '鉄の心臓', bonedie: '骨の賽', stardust: '星屑の小瓶', hatwax: '帽子の蝋',
+      blood_altar: '血の祭壇', cursed_chest: '呪われた宝箱', fate_offering: '運命の賽銭', ghost_carver: '刻み師の幽霊', mimic_chest: '古い宝箱', campfire: '焚き火' };
+    const W = 1320;
+    const SECTIONS = {
+      relics: { h: 1010, draw: drawRelics },
+      events: { h: 520, draw: drawEvents },
+      misc: { h: 420, draw: drawMisc },
+    };
+    const list = sec === 'all' ? Object.keys(SECTIONS) : [sec].filter(s => SECTIONS[s]);
+    const H = list.reduce((a, s) => a + SECTIONS[s].h, 0);
+    const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const crop = q.has('vx') || q.has('vy'), vx = +q.get('vx') || 0, vy = +q.get('vy') || 0;
+    const CW = crop ? window.innerWidth - 4 : W * zoom, CH = crop ? window.innerHeight - 70 : H * zoom;
+    cv.width = Math.round(CW * dpr); cv.height = Math.round(CH * dpr);
+    cv.style.width = CW + 'px'; cv.style.height = CH + 'px';
+
+    const label = (txt, x, y, col, align, font) => { ctx.save(); ctx.font = font || '12px system-ui, sans-serif'; ctx.fillStyle = col || '#a79fc6'; ctx.textAlign = align || 'center'; ctx.fillText(txt, x, y); ctx.restore(); };
+    const title = (txt, y) => { ctx.save(); ctx.font = 'bold 15px system-ui, sans-serif'; ctx.fillStyle = '#ffd257'; ctx.textAlign = 'left'; ctx.fillText(txt, 16, y); ctx.restore(); };
+    const rrect = (x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
+    function hudTile(x, y) { // mimics css .relic (30x30, radial bg, brass border)
+      const g = ctx.createRadialGradient(x - 3, y - 4.5, 1, x, y, 21); g.addColorStop(0, '#4a3550'); g.addColorStop(1, '#1a1222');
+      rrect(x - 15, y - 15, 30, 30, 8); ctx.fillStyle = g; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#c9953b'; ctx.stroke();
+    }
+    function card(x, y, w, h) { const g = ctx.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, '#33243c'); g.addColorStop(1, '#1e1426'); rrect(x, y, w, h, 12); ctx.fillStyle = g; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#5a4632'; ctx.stroke(); }
+    function panel(x, y, w, h) { rrect(x, y, w, h, 14); ctx.fillStyle = 'rgba(14,10,22,0.95)'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#c9953b'; ctx.stroke(); }
+
+    // a loupe: copy a region of the main canvas, scaled up with nearest-neighbour (to judge small-size readability)
+    const loupeCv = document.createElement('canvas'), lctx = loupeCv.getContext('2d');
+    function loupe(sx, sy, sw, sh, dx, dy, k) {
+      loupeCv.width = Math.round(sw * dpr * zoom); loupeCv.height = Math.round(sh * dpr * zoom);
+      const m = ctx.getTransform();
+      lctx.clearRect(0, 0, loupeCv.width, loupeCv.height);
+      lctx.drawImage(cv, m.a * sx + m.e, m.d * sy + m.f, sw * m.a, sh * m.d, 0, 0, loupeCv.width, loupeCv.height);
+      ctx.save(); ctx.imageSmoothingEnabled = false; ctx.drawImage(loupeCv, dx, dy, sw * k, sh * k); ctx.restore();
+    }
+
+    // ---------------------------------------------------------------- relics
+    function drawRelics(t) {
+      const ids = Art.RELIC_IDS;
+      title('Relics — HUD tiles (28px in a 30px tile), on a card bg, raw on dark; then a 3x loupe of the tiles', 22);
+      ids.forEach((id, i) => {
+        const x = 40 + i * 44;
+        hudTile(x, 56); Art.drawRelic(ctx, id, x, 56, 28, { t });
+        Art.drawRelic(ctx, id, x, 100, 28, { t });
+      });
+      // card-ish strip at 26px
+      card(660, 34, 640, 46);
+      ids.forEach((id, i) => Art.drawRelic(ctx, id, 684 + i * 44, 57, 26, { t }));
+      label('26px on card gradient', 980, 96);
+      loupe(18, 34, 616, 88, 18, 128, 2.1);
+      title('Cards — 64px (card-art slot), glow=1 on hover row', 340);
+      ids.forEach((id, i) => {
+        const col = i % 7, row = Math.floor(i / 7), x = 16 + col * 186, y = 356 + row * 150;
+        card(x, y, 176, 136);
+        Art.drawRelic(ctx, id, x + 48, y + 56, 64, { t });
+        Art.drawRelic(ctx, id, x + 130, y + 56, 64, { t, glow: 0.75 + 0.25 * Math.sin(t * 2) });
+        label(id + '  ' + NAMES[id], x + 88, y + 118, '#e8dcc0');
+      });
+      title('120px (detail) + dim 0.6 @44', 680);
+      ids.forEach((id, i) => {
+        const col = i % 7, row = Math.floor(i / 7), x = 16 + col * 186, y = 692 + row * 158;
+        Art.drawRelic(ctx, id, x + 74, y + 70, 120, { t });
+        Art.drawRelic(ctx, id, x + 160, y + 120, 44, { t, dim: 0.6 });
+        label(NAMES[id], x + 74, y + 150);
+      });
+    }
+
+    // ---------------------------------------------------------------- events
+    function drawEvents(t) {
+      title('Event props — 120px in the event box, plus 64px and 28px', 22);
+      Art.EVENT_PROP_IDS.forEach((id, i) => {
+        const x = 16 + i * 216, y = 36;
+        panel(x, y, 206, 300);
+        Art.drawEventProp(ctx, id, x + 103, y + 92, 120, { t });
+        label(id + '  ' + NAMES[id], x + 103, y + 172, '#ffe1a0', 'center', 'bold 13px system-ui, sans-serif');
+        Art.drawEventProp(ctx, id, x + 60, y + 230, 64, { t });
+        Art.drawEventProp(ctx, id, x + 140, y + 230, 28, { t });
+        label('64', x + 60, y + 284); label('28', x + 140, y + 284);
+      });
+      title('Event props at 200px', 360);
+      Art.EVENT_PROP_IDS.forEach((id, i) => {
+        if (i > 4) return;
+        const x = 16 + i * 262;
+        Art.drawEventProp(ctx, id, x + 120, 450, 160, { t });
+      });
+    }
+
+    // ---------------------------------------------------------------- misc
+    function drawMisc(t) {
+      title('Chisel icon (28 / 64 / 120) and the descend door (116x150, hover off/on, 2x)', 22);
+      card(16, 36, 300, 150);
+      Art.drawChiselIcon(ctx, 50, 110, 28);
+      Art.drawChiselIcon(ctx, 120, 110, 64);
+      Art.drawChiselIcon(ctx, 236, 110, 120);
+      // door slots, as in the crossroads screen (130x160 canvas, door at 65,82)
+      const hv = 0.5 + 0.5 * Math.sin(t * 1.4);
+      const slots = [{ x: 340, hover: false }, { x: 480, hover: true }, { x: 620, hover: hv }];
+      slots.forEach((s) => { panel(s.x, 40, 130, 160); Art.drawStairs(ctx, s.x + 65, 40 + 82, 116, 150, t, { hover: s.hover }); });
+      label('off', 405, 216); label('on', 545, 216); label('pulse', 685, 216);
+      if (Art.drawDoor) { panel(760, 40, 130, 160); Art.drawDoor(ctx, 'battle', 760 + 65, 40 + 82, 116, 150, t, {}); label('battle door (cmp)', 825, 216);
+        panel(900, 40, 130, 160); Art.drawDoor(ctx, 'campfire', 900 + 65, 40 + 82, 116, 150, t, {}); label('campfire door (cmp)', 965, 216); }
+      Art.drawStairs(ctx, 1160, 200, 232, 300, t, { hover: 0 });
+      loupe(340, 40, 130, 160, 20, 240, 1);
+    }
+
+    function dom() {
+      const d = document.getElementById('dom');
+      d.innerHTML = '<b style="width:100%">DOM canvases (relicCanvas 28 / 64, eventCanvas 120; res = default DPR-aware)</b>';
+      for (const id of Art.RELIC_IDS) { const tl = document.createElement('div'); tl.className = 'tile'; tl.title = id; const c = Art.relicCanvas(id, 28); if (c) tl.appendChild(c); d.appendChild(tl); }
+      const br = document.createElement('div'); br.style.width = '100%'; d.appendChild(br);
+      for (const id of Art.RELIC_IDS) { const cd = document.createElement('div'); cd.className = 'card'; const c = Art.relicCanvas(id, 64); if (c) cd.appendChild(c); d.appendChild(cd); }
+      const br2 = document.createElement('div'); br2.style.width = '100%'; d.appendChild(br2);
+      for (const id of Art.EVENT_PROP_IDS) { const e = document.createElement('div'); e.className = 'ev'; const c = Art.eventCanvas(id, 120); if (c) e.appendChild(c); d.appendChild(e); }
+      // same relic twice (cache must hand out a copy when the first is already attached)
+      const twice = document.createElement('div'); twice.className = 'tile'; const c2 = Art.relicCanvas('flint', 28); if (c2) twice.appendChild(c2); d.appendChild(twice);
+    }
+    dom();
+
+    function frame(now) {
+      const t = freeze != null ? +freeze : now / 1000;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#0d0b16'; ctx.fillRect(0, 0, cv.width, cv.height);
+      if (crop) ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, -vx * dpr * zoom, -vy * dpr * zoom);
+      else ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0);
+      let y = 0;
+      for (const s of list) {
+        ctx.save(); ctx.translate(0, y);
+        ctx.fillStyle = '#17142a'; ctx.fillRect(0, 0, W, SECTIONS[s].h - 6);
+        try { SECTIONS[s].draw(t); } catch (e) { console.error(e); }
+        ctx.restore(); y += SECTIONS[s].h;
+      }
+      if (freeze == null) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+})();
+</script>
+</body>
+</html>

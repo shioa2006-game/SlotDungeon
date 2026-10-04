@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enemies A Preview</title>
+<style>
+  :root { --bg: #0d0b16; --panel: #17142a; --ink: #e8dcc0; --dim: #8f86b8; --brass: #c9953b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 12px/1.3 "DotGothic16", system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; gap: 14px; align-items: center; padding: 8px 14px; background: #120f22ee; border-bottom: 1px solid #2c2650; flex-wrap: wrap; }
+  header b { color: var(--brass); letter-spacing: 1px; }
+  header label { color: var(--dim); display: flex; gap: 4px; align-items: center; }
+  select, input { accent-color: var(--brass); }
+  .enemy { padding: 6px 14px 10px; border-bottom: 1px solid #221d3e; }
+  .enemy h2 { margin: 4px 0 6px; font-size: 13px; color: var(--brass); font-weight: normal; }
+  .enemy h2 span { color: var(--dim); margin-left: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cell { background: var(--panel); border: 1px solid #2a2448; border-radius: 6px; padding: 2px 2px 3px; text-align: center; }
+  .cell canvas { display: block; }
+  .cell div { color: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <b>EMBERWHEEL · enemies_a preview</b>
+  <label>zoom <select id="zoom"><option value="1">1x</option><option value="2">2x</option><option value="3">3x</option></select></label>
+  <label>only <select id="only"><option value="">all</option></select></label>
+  <label><input type="checkbox" id="enr"> enraged (all cells)</label>
+  <label><input type="checkbox" id="guides"> info guides</label>
+  <label>speed <select id="spd"><option value="1">1x</option><option value="0.35">0.35x</option><option value="0">pause</option></select></label>
+</header>
+<main id="main"></main>
+<script src="../js/art/art_core.js"></script>
+<script src="../js/art/enemies_a.js"></script>
+<script>
+(function () {
+  const Art = SD.Art, PAL = Art.PAL;
+  const IDS = [['rat', '燭ネズミ'], ['slime', '澱スライム'], ['shellback', '殻ムシ'], ['bellhound', '鐘つき犬 ELITE'], ['moth', '呪い蛾'], ['wisp', '吸い火']];
+  const POSES = ['idle', 'windup', 'attack', 'cast', 'stance', 'hit', 'die', 'idle*'];
+  const ONE_SHOT = { attack: 1, hit: 1, die: 1, cast: 1, windup: 1 };
+  const qs = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  $('zoom').value = qs.get('z') || '1';
+  const onlySel = $('only');
+  for (const [id] of IDS) { const o = document.createElement('option'); o.value = id; o.textContent = id; onlySel.appendChild(o); }
+  onlySel.value = qs.get('only') || '';
+  $('enr').checked = qs.get('enr') === '1';
+  $('guides').checked = qs.get('g') === '1';
+  if (qs.get('spd')) $('spd').value = qs.get('spd');
+  let cells = [];
+  function build() {
+    const main = $('main'); main.innerHTML = ''; cells = [];
+    const z = +$('zoom').value, only = onlySel.value;
+    for (const [id, jp] of IDS) {
+      if (only && only !== id) continue;
+      const info = Art.enemyInfo(id);
+      const sec = document.createElement('section'); sec.className = 'enemy';
+      sec.innerHTML = '<h2>' + id + ' ' + jp + '<span>h ' + info.height + ' · w ' + info.width + '</span></h2>';
+      const row = document.createElement('div'); row.className = 'row'; sec.appendChild(row);
+      const W = Math.max(150, info.width + 90), H = info.height + 70;
+      const poses = (qs.get('pose') ? qs.get('pose').split(',') : POSES);
+      for (const pose of poses) {
+        const cell = document.createElement('div'); cell.className = 'cell';
+        const cv = document.createElement('canvas');
+        const dpr = window.devicePixelRatio || 1;
+        const Wc = W + (pose === 'attack' ? 70 : 0);
+        cv.width = Wc * z * dpr; cv.style.width = Wc * z + 'px'; cv.height = H * z * dpr; cv.style.height = H * z + 'px';
+        const lab = document.createElement('div'); lab.textContent = pose === 'idle*' ? 'idle (enraged)' : pose;
+        cell.appendChild(cv); cell.appendChild(lab); row.appendChild(cell);
+        cells.push({ id, pose, cv, ctx: cv.getContext('2d'), W: Wc, H, z, dpr, info, lab, off: pose === 'attack' ? 35 : 0 });
+      }
+      main.appendChild(sec);
+    }
+  }
+  ['zoom', 'only'].forEach((k) => $(k).addEventListener('change', build));
+  build();
+  let simT = 0, last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    simT += dt * +$('spd').value;
+    const t = simT, enrAll = $('enr').checked, guides = $('guides').checked;
+    for (const c of cells) {
+      const { ctx, W, H, z, dpr } = c;
+      ctx.setTransform(dpr * z, 0, 0, dpr * z, 0, 0);
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#1b1733'); g.addColorStop(0.75, '#231f3d'); g.addColorStop(1, '#141126');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      const fx = W / 2 + 6 + c.off, fy = H - 22;
+      // floor + a warm stage glow
+      ctx.fillStyle = '#17142a'; ctx.fillRect(0, fy, W, H - fy);
+      ctx.fillStyle = '#3a3460'; ctx.fillRect(0, fy, W, 2);
+      const rg = ctx.createRadialGradient(fx, fy, 0, fx, fy, W * 0.6); rg.addColorStop(0, 'rgba(255,170,90,0.10)'); rg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = rg; ctx.fillRect(0, 0, W, H);
+      let pose = c.pose, enraged = enrAll;
+      if (pose === 'idle*') { pose = 'idle'; enraged = true; }
+      const cyc = 1.7, ph = ((t % cyc) + cyc) % cyc;
+      const p = ONE_SHOT[pose] ? (qs.get('p') != null ? +qs.get('p') : Math.min(1, ph / 1.2)) : 0;
+      ctx.save(); ctx.translate(fx, fy);
+      Art.drawEnemy(ctx, c.id, pose, { t, p, enraged });
+      ctx.restore();
+      if (guides) {
+        ctx.save(); ctx.translate(fx, fy);
+        ctx.strokeStyle = 'rgba(111,211,255,0.6)'; ctx.lineWidth = 1;
+        ctx.strokeRect(-c.info.width / 2, -c.info.height, c.info.width, c.info.height);
+        ctx.fillStyle = '#ff4f5e'; ctx.beginPath(); ctx.arc(c.info.fx[0], c.info.fx[1], 3, 0, 7); ctx.fill();
+        ctx.fillStyle = '#7df0b4'; ctx.beginPath(); ctx.arc(c.info.head[0], c.info.head[1], 3, 0, 7); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.fillRect(-1, -1, 3, 3);
+        ctx.restore();
+      }
+      if (ONE_SHOT[pose]) c.lab.textContent = pose + '  p=' + p.toFixed(2);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

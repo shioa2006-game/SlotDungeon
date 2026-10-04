@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heroes Preview</title>
+<style>
+  :root { --bg: #0d0b16; --panel: #17142a; --ink: #1a1222; --bone: #efe5cf; --dim: #9c92b8; --brass: #e8bf6a; }
+  html, body { margin: 0; background: var(--bg); color: var(--bone); font: 12px/1.4 Consolas, 'Yu Gothic UI', monospace; }
+  #bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+         padding: 6px 12px; background: var(--panel); border-bottom: 2px solid #3a3460; }
+  #bar b { color: var(--brass); letter-spacing: 1px; }
+  #bar label { color: var(--dim); }
+  select, input, button { font: inherit; background: #231f3d; color: var(--bone); border: 1px solid #514a7d; border-radius: 4px; padding: 2px 6px; }
+  canvas { display: block; }
+  .hint { color: var(--dim); }
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>EMBERWHEEL · heroes</b>
+  <label>hero <select id="hero"><option value="all">all</option><option>knight</option><option>witch</option><option>priest</option></select></label>
+  <label>scale <select id="scale"><option>1</option><option>2</option><option>3</option></select></label>
+  <label>mood <select id="mood"><option>normal</option><option>worried</option><option>happy</option></select></label>
+  <label>p <input id="pfix" type="range" min="-0.01" max="1" step="0.01" value="-0.01" style="width:160px"> <span id="pval">loop</span></label>
+  <button id="pause">pause</button>
+  <span class="hint">URL: ?hero=witch&amp;s=2&amp;p=0.4&amp;t=1.2&amp;mood=worried</span>
+</div>
+<canvas id="c"></canvas>
+<script src="../js/art/art_core.js"></script>
+<script src="../js/art/heroes.js"></script>
+<script>
+(function () {
+  const Art = SD.Art, PAL = Art.PAL;
+  const POSES = Art.HERO_POSES || ['idle', 'walk', 'attack', 'cast', 'pray', 'block', 'hit', 'cheer', 'manip', 'dead'];
+  const HEROES = ['knight', 'witch', 'priest'];
+  const NOTE = {
+    knight: { attack: 'SIGNATURE slash', block: 'shield up', manip: 'Hold: shield slam', cast: 'rally (variant)', pray: 'vow (variant)' },
+    witch: { cast: 'SIGNATURE staff flare', attack: '= cast', manip: 'Re-spin: swirl', block: 'cower', pray: 'variant' },
+    priest: { pray: 'SIGNATURE censer raise', manip: 'Nudge: palm push', attack: 'censer swing (variant)', cast: 'blessing (variant)', block: 'cower' },
+  };
+  const q = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  $('hero').value = q.get('hero') || 'all';
+  if (q.get('s') && !['1', '2', '3'].includes(q.get('s'))) { const op = document.createElement('option'); op.textContent = q.get('s'); $('scale').appendChild(op); }
+  $('scale').value = q.get('s') || '1';
+  $('mood').value = q.get('mood') || 'normal';
+  if (q.get('p') != null) $('pfix').value = q.get('p');
+  const tFix = q.get('t') != null ? parseFloat(q.get('t')) : null;
+  let paused = false, tPaused = 0;
+  $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'play' : 'pause'; };
+
+  const cv = $('c'), ctx = cv.getContext('2d');
+  const CW = 210, CH = 175;           // logical cell
+  const t0 = performance.now();
+
+  function layout() {
+    const s = +$('scale').value, heroes = $('hero').value === 'all' ? HEROES : [$('hero').value];
+    const cols = Math.max(1, Math.min(POSES.length, Math.floor((window.innerWidth - 20) / (CW * s))));
+    const rowsPer = Math.ceil(POSES.length / cols);
+    return { s, heroes, cols, rowsPer, w: cols * CW * s + 20, h: (heroes.length * rowsPer * CH + 230) * s + 30 };
+  }
+
+  function stageBg(x, y, w, h) {
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, '#17142a'); g.addColorStop(0.75, '#231f3d'); g.addColorStop(1, '#2c2650');
+    ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+  }
+
+  // filmstrip mode: ?strip=attack&frames=6 → each selected hero, one pose, p sampled across the row
+  const PS = q.get('ps') ? q.get('ps').split(',').map(parseFloat) : null;
+  const STRIP = q.get('strip'), FRAMES = PS ? PS.length : +(q.get('frames') || 6), SW = +(q.get('sw') || 120), SH = +(q.get('sh') || 160);
+  function drawStrip(t, mood, L) {
+    L.heroes.forEach((id, row) => {
+      for (let i = 0; i < FRAMES; i++) {
+        const p = PS ? PS[i] : FRAMES === 1 ? 0 : i / (FRAMES - 1), cx = i * SW, cy = row * SH;
+        stageBg(cx + 1, cy + 1, SW - 2, SH - 2);
+        const fx = cx + SW * 0.42 + (+q.get('ox') || 0), fy = cy + SH - 16 + (+q.get('oy') || 0);
+        ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(fx, fy, 28, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.save(); ctx.translate(fx, fy); Art.drawHero(ctx, id, STRIP, { t, p, mood }); ctx.restore();
+        ctx.fillStyle = '#9c92b8'; ctx.font = '10px Consolas, monospace'; ctx.fillText(id[0] + ' ' + STRIP + ' ' + p.toFixed(2), cx + 4, cy + 12);
+      }
+    });
+  }
+
+  function frame(now) {
+    const L = layout();
+    if (STRIP) { L.w = FRAMES * SW * L.s + 20; L.h = L.heroes.length * SH * L.s + 20; }
+    if (cv.width !== L.w || cv.height !== L.h) { cv.width = L.w; cv.height = L.h; }
+    let t = (now - t0) / 1000;
+    if (paused) t = tPaused; else tPaused = t;
+    if (tFix != null) t = tFix;
+    const pf = parseFloat($('pfix').value);
+    $('pval').textContent = pf < 0 ? 'loop' : pf.toFixed(2);
+    const mood = $('mood').value;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#0d0b16'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.save(); ctx.translate(10, 10); ctx.scale(L.s, L.s);
+    if (STRIP) { drawStrip(t, mood, L); ctx.restore(); requestAnimationFrame(frame); return; }
+    let row = 0;
+    for (const id of L.heroes) {
+      POSES.forEach((pose, i) => {
+        const cx = (i % L.cols) * CW, cy = (row + Math.floor(i / L.cols)) * CH;
+        stageBg(cx + 2, cy + 2, CW - 4, CH - 4);
+        // warm key light from the upper left (scene mood)
+        const g = ctx.createRadialGradient(cx + 40, cy + 20, 0, cx + 40, cy + 20, 160);
+        g.addColorStop(0, 'rgba(255,170,90,0.10)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g; ctx.fillRect(cx + 2, cy + 2, CW - 4, CH - 4);
+        const fx = cx + 78, fy = cy + CH - 22;
+        ctx.strokeStyle = '#3a3460'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx + 6, fy + 0.5); ctx.lineTo(cx + CW - 6, fy + 0.5); ctx.stroke();
+        // preview-only ground shadow (the game draws its own)
+        ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(fx, fy, 30, 5, 0, 0, Math.PI * 2); ctx.fill();
+        const oneShot = pose !== 'idle' && pose !== 'walk';
+        const p = pf >= 0 ? pf : (oneShot ? Math.min(1, ((t + i * 0.13) % (pose === 'dead' ? 2.4 : 1.6)) / 1.2) : 0);
+        ctx.save(); ctx.translate(fx, fy);
+        Art.drawHero(ctx, id, pose, { t, p, mood });
+        ctx.restore();
+        // fx origin marker in idle
+        if (pose === 'idle') {
+          const inf = Art.heroInfo(id);
+          ctx.strokeStyle = 'rgba(125,240,180,0.7)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.arc(fx + inf.fx[0], fy + inf.fx[1], 3, 0, Math.PI * 2); ctx.stroke();
+          ctx.strokeStyle = 'rgba(255,210,87,0.6)';
+          ctx.beginPath(); ctx.moveTo(fx + inf.head[0] - 4, fy + inf.head[1]); ctx.lineTo(fx + inf.head[0] + 4, fy + inf.head[1]); ctx.stroke();
+        }
+        ctx.fillStyle = '#e8bf6a'; ctx.font = 'bold 11px Consolas, monospace';
+        ctx.fillText(id + ' · ' + pose, cx + 8, cy + 15);
+        ctx.fillStyle = '#9c92b8'; ctx.font = '10px Consolas, monospace';
+        ctx.fillText((oneShot ? 'p ' + p.toFixed(2) : 't loop') + (NOTE[id][pose] ? '  ' + NOTE[id][pose] : ''), cx + 8, cy + 28);
+      });
+      row += L.rowsPer;
+    }
+    // stage lineup at real positions (priest 175/372, witch 285/364, knight 395/378), offset to x=0
+    const sy = row * CH + 6;
+    stageBg(0, sy, Math.min(L.cols * CW, 620), 214);
+    ctx.fillStyle = '#e8bf6a'; ctx.font = 'bold 11px Consolas, monospace';
+    ctx.fillText('stage lineup (game positions)  ·  cycling all poses', 8, sy + 16);
+    const cyc = Math.floor(t / 2.2) % POSES.length, pose = POSES[cyc], pp = Math.min(1, (t % 2.2) / 1.4);
+    ctx.fillStyle = '#9c92b8'; ctx.font = '10px Consolas, monospace'; ctx.fillText('pose: ' + pose, 8, sy + 30);
+    const ox = -60, oy = sy - 170;
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(0, oy + 368, Math.min(L.cols * CW, 620), sy + 214 - (oy + 368));
+    for (const [id, x, y] of [['priest', 175, 372], ['witch', 285, 364], ['knight', 395, 378]]) {
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(ox + x, oy + y, 30, 5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.save(); ctx.translate(ox + x, oy + y);
+      Art.drawHero(ctx, id, pose, { t, p: pose === 'idle' || pose === 'walk' ? 0 : pp, mood });
+      ctx.restore();
+    }
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

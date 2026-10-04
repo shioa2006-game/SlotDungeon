@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Emberwheel Enemies B Preview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #0d0b16; --fg: #e8dcc0; --muted: #8a80a8; --cell: #17142a; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; }
+  header { padding: 10px 16px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; position: sticky; top: 0; background: rgba(13,11,22,0.92); z-index: 2; }
+  header select, header input { background: #231f3d; color: var(--fg); border: 1px solid #3a3460; border-radius: 4px; }
+  section { padding: 4px 16px 10px; }
+  h2 { font-size: 14px; margin: 8px 0 6px; color: #ffd257; font-weight: 600; }
+  h2 span { color: var(--muted); font-weight: 400; margin-left: 10px; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cell { background: var(--cell); border-radius: 6px; overflow: hidden; }
+  .cell div { text-align: center; color: var(--muted); font-size: 11px; padding: 2px 0 4px; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<header>
+  <strong>EMBERWHEEL — enemies B (big enemies + boss)</strong>
+  <label>show <select id="only"><option value="">all</option></select></label>
+  <label>zoom <select id="zoom"><option>0.5</option><option>1</option><option>1.5</option><option>2</option></select></label>
+  <label>speed <select id="spd"><option value="1">1x</option><option value="0.35">0.35x</option><option value="0">pause</option></select></label>
+  <label><input type="checkbox" id="guides"> info guides</label>
+  <span style="color:var(--muted)">one-shot poses loop p over 1.2s · ?only=id&amp;z=2&amp;i=0,2 (cells)&amp;p=0.4&amp;t=3 freezes</span>
+</header>
+<main id="main"></main>
+<script src="../js/art/art_core.js"></script>
+<script src="../js/art/enemies_b.js"></script>
+<script>
+(function () {
+  const Art = SD.Art;
+  const P7 = ['idle', 'windup', 'attack', 'cast', 'stance', 'hit', 'die'];
+  const std = (id, extra) => P7.map((p) => ({ pose: p, opts: Object.assign({}, extra), label: p })).concat([{ pose: 'idle', opts: Object.assign({ enraged: true }, extra), label: 'idle (enraged)' }]);
+  const GROUPS = [
+    { key: 'sentry', id: 'sentry', title: 'sentry 骸骨衛兵', cells: std('sentry') },
+    { key: 'sentry_deep', id: 'sentry', title: 'sentry 骸骨衛兵 — variant deep (zone 3)', cells: std('sentry', { variant: 'deep' }) },
+    { key: 'abbot', id: 'abbot', title: 'abbot 骨の修道院長 ELITE', cells: std('abbot') },
+    { key: 'golem', id: 'golem', title: 'golem 歯車ゴーレム', cells: std('golem') },
+    { key: 'shade', id: 'shade', title: 'shade 影の写し身', cells: std('shade') },
+    { key: 'mimic', id: 'mimic', title: 'mimic ミミック', cells: std('mimic') },
+    { key: 'ashlord', id: 'ashlord', title: 'ashlord 灰輪の主 BOSS — phase 1 (sealed)', cells: [
+      { pose: 'idle', opts: { phase: 1, seals: 3 }, label: 'p1 idle seals 3' },
+      { pose: 'idle', opts: { phase: 1, seals: 1 }, label: 'p1 idle seals 1' },
+      { pose: 'windup', opts: { phase: 1, seals: 3 }, label: 'p1 windup' },
+      { pose: 'attack', opts: { phase: 1, seals: 2 }, label: 'p1 attack' },
+      { pose: 'cast', opts: { phase: 1, seals: 3 }, label: 'p1 cast' },
+      { pose: 'stance', opts: { phase: 1, seals: 3 }, label: 'p1 stance' },
+      { pose: 'hit', opts: { phase: 1, seals: 2 }, label: 'p1 hit' },
+    ] },
+    { key: 'ashlord2', id: 'ashlord', title: 'ashlord — phase 2 (reverse) / phase 3 (crumbling)', cells: [
+      { pose: 'idle', opts: { phase: 2 }, label: 'p2 idle' },
+      { pose: 'windup', opts: { phase: 2 }, label: 'p2 windup' },
+      { pose: 'attack', opts: { phase: 2 }, label: 'p2 attack' },
+      { pose: 'cast', opts: { phase: 2 }, label: 'p2 cast' },
+      { pose: 'idle', opts: { phase: 3 }, label: 'p3 idle' },
+      { pose: 'windup', opts: { phase: 3 }, label: 'p3 windup' },
+      { pose: 'hit', opts: { phase: 3 }, label: 'p3 hit' },
+      { pose: 'die', opts: { phase: 3 }, label: 'p3 die' },
+      { pose: 'idle', opts: { phase: 2, enraged: true }, label: 'p2 idle (enraged)' },
+    ] },
+  ];
+  const ONE_SHOT = { attack: 1, hit: 1, die: 1, cast: 1 };
+  const qs = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  for (const g of GROUPS) { const o = document.createElement('option'); o.value = g.key; o.textContent = g.key; $('only').appendChild(o); }
+  $('only').value = qs.get('only') || '';
+  $('zoom').value = qs.get('z') || '1';
+  $('guides').checked = qs.get('g') === '1';
+  if (qs.get('spd')) $('spd').value = qs.get('spd');
+  const fixedP = qs.has('p') ? +qs.get('p') : null, fixedT = qs.has('t') ? +qs.get('t') : null;
+  const pick = qs.get('i') ? qs.get('i').split(',').map(Number) : null;
+  let cells = [];
+  function build() {
+    const main = $('main'); main.innerHTML = ''; cells = [];
+    const z = +$('zoom').value, only = $('only').value;
+    for (const g of GROUPS) {
+      if (only && only !== g.key) continue;
+      const info = Art.enemyInfo(g.id);
+      const sec = document.createElement('section');
+      sec.innerHTML = '<h2>' + g.title + '<span>h ' + info.height + ' · w ' + info.width + (Art.enemies[g.id] ? '' : ' · NOT REGISTERED') + '</span></h2>';
+      const row = document.createElement('div'); row.className = 'row'; sec.appendChild(row);
+      const W = Math.round(info.width + 110), H = Math.round(info.height + (g.id === 'ashlord' ? 150 : 110));
+      for (let ci = 0; ci < g.cells.length; ci++) {
+        const c = g.cells[ci];
+        if (pick && pick.indexOf(ci) < 0) continue;
+        const el = document.createElement('div'); el.className = 'cell';
+        const cv = document.createElement('canvas'); const dpr = window.devicePixelRatio || 1;
+        cv.width = W * z * dpr; cv.height = H * z * dpr; cv.style.width = W * z + 'px'; cv.style.height = H * z + 'px';
+        const lab = document.createElement('div'); lab.textContent = c.label;
+        el.appendChild(cv); el.appendChild(lab); row.appendChild(el);
+        cells.push(Object.assign({ id: g.id, cv, ctx: cv.getContext('2d'), W, H, z, dpr, info }, c));
+      }
+      main.appendChild(sec);
+    }
+  }
+  ['zoom', 'only'].forEach((k) => $(k).addEventListener('change', build));
+  build();
+  let simT = 0, last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    simT += dt * +$('spd').value;
+    const t = fixedT != null ? fixedT : simT;
+    for (const c of cells) {
+      const ctx = c.ctx, s = c.z * c.dpr;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.cv.width, c.cv.height);
+      ctx.setTransform(s, 0, 0, s, 0, 0);
+      const g = ctx.createLinearGradient(0, 0, 0, c.H);
+      g.addColorStop(0, '#120f22'); g.addColorStop(0.75, '#231f3d'); g.addColorStop(1, '#17142a');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, c.W, c.H);
+      const fx = c.W / 2 + 10, fy = c.H - 36;
+      ctx.fillStyle = 'rgba(58,52,96,0.6)'; ctx.fillRect(0, fy, c.W, c.H - fy);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(fx, fy, c.info.width * 0.42, 8, 0, 0, Math.PI * 2); ctx.fill();
+      const p = fixedP != null ? fixedP : (ONE_SHOT[c.pose] ? ((t % 1.6) / 1.2 > 1 ? 1 : (t % 1.6) / 1.2) : 0);
+      ctx.save(); ctx.translate(fx, fy);
+      Art.drawEnemy(ctx, c.id, c.pose, Object.assign({ t, p }, c.opts));
+      ctx.restore();
+      if ($('guides').checked) {
+        ctx.save(); ctx.translate(fx, fy);
+        ctx.strokeStyle = 'rgba(125,240,180,0.6)'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+        ctx.strokeRect(-c.info.width / 2, -c.info.height, c.info.width, c.info.height);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ff4f5e'; ctx.beginPath(); ctx.arc(c.info.fx[0], c.info.fx[1], 4, 0, 7); ctx.fill();
+        ctx.fillStyle = '#6fd3ff'; ctx.beginPath(); ctx.arc(c.info.head[0], c.info.head[1], 4, 0, 7); ctx.fill();
+        ctx.restore();
+      }
+      if (ONE_SHOT[c.pose] && fixedP == null) c.lab.textContent = c.label + '  p=' + p.toFixed(2);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

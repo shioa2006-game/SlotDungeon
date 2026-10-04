@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backgrounds Preview</title>
+<style>
+  :root { --bg: #07060c; --panel: #0f0d1a; --line: #2a2546; --text: #d8d0e8; --dim: #8f86ad; --brass: #c9953b; --candle: #ffc15e; }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, "Segoe UI", sans-serif; margin: 0; }
+  .bar { position: sticky; top: 0; z-index: 5; background: rgba(15,13,26,0.96); border-bottom: 1px solid var(--line);
+         padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .bar .group { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  button { background: #1d1934; color: #e8dcc0; border: 1px solid #3f3866; border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--brass); }
+  button.on { background: var(--brass); color: #1a1222; border-color: var(--brass); }
+  label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
+  input[type=range] { width: 120px; accent-color: var(--brass); }
+  output { color: var(--text); min-width: 3.5em; display: inline-block; font-variant-numeric: tabular-nums; }
+  #list { padding: 10px 12px 40px; }
+  .zone { margin: 0 0 18px; }
+  .zone h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--candle); display: flex; gap: 12px; align-items: baseline; }
+  .zone h3 small { color: var(--dim); font-weight: 400; font-variant-numeric: tabular-nums; }
+  canvas { display: block; background: #000; border: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="group" id="tabs"></div>
+  <label>depth <input id="depth" type="range" min="0" max="1" step="0.01" value="0"><output id="depthO">0.00</output></label>
+  <label>walk px/s <input id="speed" type="range" min="-400" max="400" step="10" value="120"><output id="speedO">120</output></label>
+  <label>cam offset <input id="cam" type="range" min="0" max="6000" step="1" value="0"><output id="camO">0</output></label>
+  <label><input id="fg" type="checkbox" checked> foreground</label>
+  <label><input id="actors" type="checkbox" checked> actor stand-ins</label>
+  <label><input id="pause" type="checkbox"> pause</label>
+</div>
+<div id="list"></div>
+
+<script src="../js/art/art_core.js"></script>
+<script src="../js/art/backgrounds.js"></script>
+<script>
+(function () {
+  const Art = SD.Art;
+  const ZONES = [
+    ['cellar', '蝋燭の地下蔵 cellar', 440],
+    ['ossuary', '水没した納骨堂 ossuary', 440],
+    ['gearworks', '歯車の深淵 gearworks', 440],
+    ['abyss', '灰輪の座 abyss (boss arena)', 440],
+    ['camp', '野営地 camp (720)', 720],
+    ['title', 'タイトル title (720)', 720],
+  ];
+  const q = new URLSearchParams(location.search);
+  const st = {
+    sel: q.get('zone') || 'all',
+    depth: +(q.get('depth') || 0),
+    speed: q.has('speed') ? +q.get('speed') : 120,
+    cam: +(q.get('cam') || 0),
+    fg: q.get('fg') !== '0',
+    actors: q.get('actors') !== '0',
+    pause: q.get('pause') === '1',
+    fixedT: q.has('t') ? +q.get('t') : null,
+  };
+  const $ = (id) => document.getElementById(id);
+  if (q.get('bare') === '1') { // canvas-only mode for headless captures
+    const s = document.createElement('style');
+    s.textContent = '.bar,.zone h3{display:none!important} #list{padding:0!important} .zone{margin:0!important} canvas{border:0!important}';
+    document.head.appendChild(s);
+  }
+  $('depth').value = st.depth; $('speed').value = st.speed; $('cam').value = st.cam;
+  $('fg').checked = st.fg; $('actors').checked = st.actors; $('pause').checked = st.pause;
+
+  const tabs = $('tabs');
+  const mkTab = (id, label) => {
+    const b = document.createElement('button');
+    b.textContent = label; b.dataset.id = id;
+    b.onclick = () => { st.sel = id; build(); };
+    tabs.appendChild(b);
+  };
+  mkTab('all', 'All');
+  ZONES.forEach(([id]) => mkTab(id, id));
+
+  let views = [];
+  function build() {
+    for (const b of tabs.children) b.classList.toggle('on', b.dataset.id === st.sel);
+    const list = $('list'); list.innerHTML = '';
+    views = [];
+    for (const [id, label, H] of ZONES) {
+      if (st.sel !== 'all' && st.sel !== id) continue;
+      const wrap = document.createElement('div'); wrap.className = 'zone';
+      const h = document.createElement('h3'); h.textContent = label;
+      const info = document.createElement('small'); h.appendChild(info);
+      const cv = document.createElement('canvas'); cv.width = 1280; cv.height = H;
+      wrap.appendChild(h); wrap.appendChild(cv); list.appendChild(wrap);
+      if (q.has('z')) { // inspection zoom: ?z=3&zx=..&zy=.. (canvas px of the top-left corner)
+        const z = +q.get('z'), zx = +(q.get('zx') || 0), zy = +(q.get('zy') || 0);
+        document.body.style.overflow = 'hidden';
+        cv.style.transformOrigin = '0 0';
+        cv.style.imageRendering = 'pixelated';
+        cv.style.transform = 'scale(' + z + ') translate(' + -zx + 'px,' + -zy + 'px)';
+      }
+      views.push({ id, H, ctx: cv.getContext('2d'), info, ms: 0 });
+    }
+  }
+  build();
+
+  const bindRange = (id, key, fmt) => { const el = $(id), o = $(id + 'O'); const f = () => { st[key] = +el.value; o.textContent = fmt(st[key]); }; el.oninput = f; f(); };
+  bindRange('depth', 'depth', (v) => v.toFixed(2));
+  bindRange('speed', 'speed', (v) => String(v));
+  bindRange('cam', 'cam', (v) => String(v));
+  $('fg').onchange = (e) => (st.fg = e.target.checked);
+  $('actors').onchange = (e) => (st.actors = e.target.checked);
+  $('pause').onchange = (e) => (st.pause = e.target.checked);
+
+  // simple ink stand-ins at the contract positions to judge actor-band readability
+  function standIns(ctx, t) {
+    const P = Art.PAL;
+    const shadow = (x, y, w) => { ctx.save(); ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(x, y, w, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore(); };
+    const hero = (x, y, body, bodyS, h, hat, hatS, bob) => {
+      shadow(x, y, 26);
+      ctx.save(); ctx.translate(x, y + bob);
+      Art.shape(ctx, (c) => { c.beginPath(); c.moveTo(-22, 0); c.quadraticCurveTo(-26, -h * 0.45, -12, -h * 0.5); c.lineTo(12, -h * 0.5); c.quadraticCurveTo(26, -h * 0.45, 22, 0); c.closePath(); }, body, bodyS);
+      Art.shape(ctx, (c) => Art.circlePath(c, 0, -h * 0.68, h * 0.24), P.skin, P.skinShade);
+      if (hat) Art.shape(ctx, hat, hatS[0], hatS[1]);
+      Art.heroEyes(ctx, 4, -h * 0.66, 12, 4, { look: 0.5, blink: (t % 3.2) < 0.12 ? 1 : 0 });
+      ctx.restore();
+    };
+    const b = (k) => Math.sin(t * 3 + k) * 1.5;
+    hero(175, 372, P.priestRobe, P.priestRobeShade, 100, null, null, b(0));
+    hero(285, 364, P.witchRobe, P.witchRobeShade, 100, (c) => { c.beginPath(); c.moveTo(-30, -82); c.lineTo(30, -82); c.lineTo(14, -150); c.closePath(); }, [P.witchHat, P.witchHatShade], b(1));
+    hero(395, 378, P.knightTabard, P.knightTabardShade, 110, (c) => { Art.roundRectPath(c, -24, -110, 48, 40, 8); }, [P.steel, P.steelShade], b(2));
+    shadow(930, 376, 50);
+    ctx.save(); ctx.translate(930, 376 + Math.sin(t * 2) * 2);
+    Art.shape(ctx, (c) => Art.blobPath(c, [[-50, 0], [-58, -50], [-30, -96], [10, -104], [48, -70], [54, 0]]), '#5a3a6e', '#3e2650');
+    Art.enemyEye(ctx, -24, -62, 6, {}); Art.enemyEye(ctx, 2, -64, 6, {});
+    ctx.restore();
+  }
+
+  let walk = 0, last = performance.now(), tAcc = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (!st.pause) { tAcc += dt; walk += st.speed * dt; }
+    const t = st.fixedT != null ? st.fixedT : tAcc;
+    const camX = walk + st.cam;
+    for (const v of views) {
+      const ctx = v.ctx, t0 = performance.now();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, 1280, v.H);
+      const opts = { t, camX: v.id === 'abyss' ? camX * 0.25 : camX, W: 1280, H: v.H, depth: st.depth };
+      Art.drawBackground(ctx, v.id, opts);
+      if (st.actors && v.H === 440) standIns(ctx, t);
+      if (st.fg) Art.drawForeground(ctx, v.id, opts);
+      const ms = performance.now() - t0;
+      v.ms = v.ms * 0.9 + ms * 0.1;
+      v.info.textContent = 'camX ' + opts.camX.toFixed(0) + '  ·  ' + v.ms.toFixed(2) + ' ms/frame';
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

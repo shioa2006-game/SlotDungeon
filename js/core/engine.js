@@ -4,7 +4,9 @@
  *   run.begin() -> events
  *   run.phase: 'chisel' | 'crossroads' | 'event' | 'idle' | 'spun' | 'dead' | 'won'
  *   combat:   spin() / toggleHold(i) / respin() / nudge(i, dir) / bless(i) / echo(src, dst) / fateKey(reel, cell)
+ *             advance() (拍子木: send the enemy's script one cell) / borrow() (借り火: a one-turn spark, paid with the script)
  *             forecast() (pure preview of the payline) / shouldAutoResolve() / resolve()
+ *   previews (never touch the real state or the RNG): scriptBand() / previewTurn() / previewAdvance() / previewBorrow()
  *   between:  choose(offerIdx|null, doorIdx)  (crossroads: carving/relic pick + next door on ONE screen)
  *             chooseEvent(optionId) / chiselCell(reel, cell) / finishChisel()
  *   end:      run.summary
@@ -18,6 +20,7 @@
   let UID = 1;
   const cell = (s, extra) => Object.assign({ s, g: false, temp: false, uid: UID++ }, extra || {});
   const COMBO_KINDS = { trine: 1, quad: 1, bond: 1, reaper: 1 };
+  const UNKNOWN_CELL = { k: 'unknown', label: '？', unknown: true };
 
   class Run {
     constructor(mods, opts = {}) {
@@ -40,6 +43,8 @@
         damageTaken: 0, heavyTaken: 0, selfDmg: 0, lanterns: 0,
         // regrets (fate's whisper)
         nearMiss: 0, pairNoTrine: 0, armorLost: 0, wardShort: 0, bondNear: 0, markHits: 0, thirstLost: 0, zeroSpark: 0, burnDealt: 0,
+        // the Ashwheel's script / borrowing
+        advances: 0, borrows: 0, debtTaken: 0, enemyHealed: 0, zeroTurns: 0, lockedTurns: 0,
       };
       this.eliteKills = [];
       this.usedEvents = {};
@@ -78,6 +83,14 @@
       const b = this.sparks;
       this.sparks = Math.min(this.maxSparks, this.sparks + n);
       return this.sparks - b;
+    }
+    // sparks usable right now: the stored ones plus a spark borrowed from the Ashwheel (this turn only, never stored)
+    sparkAvail() { return this.sparks + (this.fight && this.fight.borrowed > 0 ? this.fight.borrowed : 0); }
+    borrowedSparks() { return this.fight && this.fight.borrowed > 0 ? this.fight.borrowed : 0; }
+    _paySpark() {
+      if (this.fight && this.fight.borrowed > 0) { this.fight.borrowed -= 1; return 'borrowed'; }
+      this.sparks -= 1;
+      return 'spark';
     }
 
     // ================================================================== flow
@@ -473,7 +486,7 @@
       const e = {
         id: enemyId, art: def.art || enemyId, variant: def.variant || null, name: (dread ? '怨念の' : '') + def.name,
         hp, maxHp: hp, armor: def.armor, block: 0, atkBonus: (!def.elite && !def.boss && k >= 2) ? 1 : 0,
-        atkMult: dread ? 1.5 : 1, burn: 0, turn: 0, seals: def.seals || 0, maxSeals: def.seals || 0, phase: 1,
+        atkMult: dread ? 1.5 : 1, burn: 0, turn: 0, cursor: 0, seals: def.seals || 0, maxSeals: def.seals || 0, phase: 1,
         stunned: false, staggered: false, doom: null, markIdx: null, dread, elite: !!def.elite, boss: !!def.boss,
         ember: def.ember * (dread ? 2 : 1), intent: null, now: null, lastK: null, tip: def.tip,
       };
@@ -484,6 +497,7 @@
         echoLeft: this.mods.echo ? 1 : 0, keyLeft: this.mods.fateKey ? 1 : 0, mirrorFree: this.hasRelic('mirror') ? 1 : 0,
         momentum: !!(this.mods.momentum && this.stats.kills > 0), resolves: 0, rampart: false, guardian: false,
         chainUsed: false, burnedThisTurn: false, lanternSparkThisTurn: false,
+        advanced: false, borrowed: 0, borrowUsed: false, debt: false,
       };
       for (const r of this.reels) { r.held = false; r.carried = false; r.jam = false; r.echo = null; }
       const ev = [];
@@ -496,6 +510,8 @@
       if (this.fight.momentum) this._gainSparks(1);
       if (this.hasRelic('buckler')) this.block += 2;
       if (this.hasRelic('hourglass')) this._gainSparks(1);
+      // 借り火 owed from a fight that ended first: this enemy collects it on its first turn
+      if (this.debtCarry) { this.debtCarry = false; this.fight.debt = true; this.fight.debtCarried = true; ev.push({ t: 'debtCarried' }); }
       this._newIntent();
       this.phase = 'idle';
       ev.unshift({ t: 'combat', enemy: this._enemySnap(), intent: e.intent, block: this.block, sparks: this.sparks, momentum: this.fight.momentum, hp: this.hp, maxHp: this.maxHp });
@@ -508,12 +524,46 @@
         burn: e.burn, seals: e.seals, maxSeals: e.maxSeals, phase: e.phase, dread: e.dread, elite: e.elite, boss: e.boss, doom: e.doom };
     }
 
+    // the first cell of a fight's script (cursor 0)
     _newIntent() {
-      const e = this.enemy, def = D().ENEMIES[e.id];
-      const it = def.ai(e, this);
+      const e = this.enemy;
+      const it = this._readCell(e);
       e.intent = it;
       e.now = it.now || null;
       return it;
+    }
+
+    // ================================================================== 灰輪の台本 (the enemy's script)
+    // Reading a cell may roll the run's dice (e.g. the rat): such cells are flagged so previews never pretend to know them.
+    _readCell(e) {
+      const s0 = this.rng.state();
+      const it = D().ENEMIES[e.id].ai(e, this);
+      if (this.rng.state() !== s0) it.random = true;
+      return it;
+    }
+    // Move the script on by one cell and read it. This is NOT an enemy turn: e.turn is untouched.
+    _nextCell(e) {
+      e.cursor = (e.cursor || 0) + 1;
+      return this._readCell(e);
+    }
+    // What a played (or skipped) cell leaves behind in the script state.
+    static scriptTick(e, it) {
+      if (!it) return;
+      if (it.doomTick) e.doom = (e.doom || 3) - 1;
+      if (it.k === 'doom') e.doom = 0;
+      e.lastK = it.k;
+    }
+    // A wound-up blow can be called early, never sent away: 強撃 and 灰燼 are locked in the script.
+    isLockedCell(it) { return !!(it && (it.heavy || it.k === 'doom')); }
+
+    // Display damage of a script cell for an enemy (or a read-only copy of one).
+    cellDamage(it, g) {
+      const e = g || this.enemy;
+      if (!it || !e || it.unknown) return null;
+      if (it.k === 'charge') return it.next ? Math.round((it.next + e.atkBonus) * e.atkMult) : null;
+      if (it.v == null || it.k === 'drain') return null;
+      if (it.k === 'attack' || it.k === 'doom' || it.k === 'jam') return Math.round((it.v + e.atkBonus) * e.atkMult);
+      return it.v;
     }
 
     // Final damage an intent will deal (for UI bubbles).
@@ -546,6 +596,7 @@
       this.fight.respinsThisTurn = 0;
       this.fight.paidRespins = 0;
       this.fight.manipulated = false;
+      this.fight.advanced = false;
       this.stats.spins += 1;
       this.phase = 'spun';
       // Run 1: "the Emberwheel awakens" — guarantee one free, guided nudge into a trine early on.
@@ -555,6 +606,11 @@
           this._rigNearMiss(spun);
         }
         this.awaken.ready = this.awakenTargets().length > 0;
+      }
+      // agency bookkeeping: turns spent with no sparks, and turns where nothing at all could be done
+      if (this.mods.sparks && this.sparkAvail() === 0) {
+        this.stats.zeroTurns += 1;
+        if (!this._anyAction(true)) this.stats.lockedTurns += 1;
       }
       return [{ t: 'spin', stops: this.reels.map((r) => r.pos), spun, awaken: this.awaken.ready }];
     }
@@ -583,31 +639,49 @@
       });
     }
 
+    // Is any action possible at all? (withBorrow: count borrowing from the Ashwheel as one)
+    _anyAction(withBorrow) {
+      return this.canRespin() || this.canNudgeAny() || this.canBlessAny() || this.canEchoAny() || this.canFateKey() || this.canAdvance() ||
+        (withBorrow ? this.canBorrow() : false);
+    }
+
     // Is there any meaningful action available after a spin?
     needsDecision() {
       if (this.phase !== 'spun') return false;
       if (this.awaken.ready) return true;
-      return this.canRespin() || this.canNudgeAny() || this.canBlessAny() || this.canEchoAny() || this.canFateKey() ||
-        false;
+      return this._anyAction(false) || (this.canBorrow() && this.borrowWorthwhile());
     }
 
     // UI helper: resolve automatically after a short beat?
+    // Early on a trine/bond fires at once (the joy of the early game). Once the player can plan around it
+    // (継ぎ留め / 拍子木, mods.comboPause) a combo no longer forces the hand while something can still be done.
     shouldAutoResolve() {
       if (this.phase !== 'spun') return false;
       if (this.awaken.ready) return false;
       if (!this.needsDecision()) return true;
       const R = this.forecast();
-      if (R.combos.some((c) => COMBO_KINDS[c.k] && c.k !== 'reaper')) return true;
       const e = this.enemy;
       if (e && R.totalDmg >= e.hp + e.block && !(e.now && e.now.k === 'reflect')) return true;
+      if (R.combos.some((c) => COMBO_KINDS[c.k] && c.k !== 'reaper')) return !this.mods.comboPause;
       return false;
+    }
+    // Why the turn stopped on a combo (for the UI): null when it would not have stopped.
+    comboPauseReason() {
+      if (this.phase !== 'spun' || !this.mods.comboPause) return null;
+      const R = this.forecast();
+      if (!R.combos.some((c) => COMBO_KINDS[c.k] && c.k !== 'reaper') || this.shouldAutoResolve()) return null;
+      if (R.groups.heart && R.heal > this.maxHp - this.hp) return 'overheal';
+      const it = this.enemy && this.enemy.intent;
+      if (R.groups.ward && R.groups.ward.n >= 2 && !(it && (it.k === 'attack' || it.k === 'doom' || it.k === 'jam' || it.k === 'charge'))) return 'idleWard';
+      if (this.canAdvance()) return 'script';
+      return 'plan';
     }
 
     respinCost() {
       if (!this.mods.respin) return null;
       if (!this.fight.freeRespinUsed) return 'free';
       if (this.fight.mirrorFree > 0) return 'free';
-      if (this.sparks >= 1) return 'spark';
+      if (this.sparkAvail() >= 1) return 'spark';
       if (this.mods.bloodPrice && this.hp > 4) return 'hp';
       return null;
     }
@@ -620,8 +694,9 @@
     respin() {
       if (!this.canRespin()) return [];
       const cost = this.respinCost();
+      let paid = cost;
       if (cost === 'free') { if (!this.fight.freeRespinUsed) this.fight.freeRespinUsed = true; else this.fight.mirrorFree -= 1; }
-      else if (cost === 'spark') { this.sparks -= 1; this.fight.paidRespins += 1; }
+      else if (cost === 'spark') { paid = this._paySpark(); this.fight.paidRespins += 1; }
       else if (cost === 'hp') { this.hp -= 4; this.fight.paidRespins += 1; }
       const spun = [];
       for (const r of this.reels) {
@@ -632,7 +707,7 @@
       this.fight.respinsThisTurn += 1;
       this.fight.manipulated = true;
       this.stats.respins += 1;
-      return [{ t: 'respin', stops: this.reels.map((r) => r.pos), spun, cost, sparks: this.sparks, hp: this.hp }];
+      return [{ t: 'respin', stops: this.reels.map((r) => r.pos), spun, cost: paid, sparks: this.sparks, borrowed: this.borrowedSparks(), hp: this.hp }];
     }
 
     canHold(i) {
@@ -656,7 +731,7 @@
       if (this.awaken.ready) return 'free';
       if (!this.mods.nudge) return null;
       if (this.fight.freeNudgeLeft > 0 || this.fight.mirrorFree > 0) return 'free';
-      if (this.sparks >= 1) return 'spark';
+      if (this.sparkAvail() >= 1) return 'spark';
       return null;
     }
     canNudge(i, dir = 1) {
@@ -670,17 +745,17 @@
     // dir < 0: a symbol ABOVE the payline moves onto it; dir > 0: a symbol BELOW moves onto it.
     nudge(i, dir) {
       if (!this.canNudge(i, dir)) return [];
-      const cost = this.nudgeCost();
+      let cost = this.nudgeCost();
       const wasAwaken = this.awaken.ready;
       if (wasAwaken) { this.awaken.ready = false; this.awaken.done = true; }
       else if (cost === 'free') { if (this.fight.freeNudgeLeft > 0) this.fight.freeNudgeLeft -= 1; else this.fight.mirrorFree -= 1; }
-      else this.sparks -= 1;
+      else cost = this._paySpark();
       const r = this.reels[i];
       r.pos = U().mod(r.pos + dir, r.strip.length);
       r.echo = null;
       this.stats.nudges += 1;
       this.fight.manipulated = true;
-      const ev = [{ t: 'nudge', reel: i, dir, cost, sparks: this.sparks, pos: r.pos, awaken: wasAwaken }];
+      const ev = [{ t: 'nudge', reel: i, dir, cost, sparks: this.sparks, borrowed: this.borrowedSparks(), pos: r.pos, awaken: wasAwaken }];
       if (this.mods.gentle) {
         const b = this.hp; this.hp = Math.min(this.maxHp, this.hp + 2);
         if (this.hp > b) ev.push({ t: 'heal', amount: this.hp - b, hp: this.hp, src: 'gentle' });
@@ -703,7 +778,7 @@
 
     // Echo: copy the payline symbol of reel `src` onto reel `dst`'s payline (this turn only).
     canEcho(src, dst) {
-      if (this.phase !== 'spun' || this.fight.echoLeft <= 0 || this.sparks < 1 || src === dst) return false;
+      if (this.phase !== 'spun' || this.fight.echoLeft <= 0 || this.sparkAvail() < 1 || src === dst) return false;
       const a = this.reels[src], b = this.reels[dst];
       if (!a || !b || b.jam) return false;
       return this.paylineCell(src).s !== this.paylineCell(dst).s;
@@ -715,15 +790,15 @@
     echo(src, dst) {
       if (!this.canEcho(src, dst)) return [];
       this.fight.echoLeft -= 1;
-      this.sparks -= 1;
+      const paid = this._paySpark();
       const s = this.paylineCell(src);
       this.reels[dst].echo = cell(s.s, { g: s.g, echo: true });
       this.fight.manipulated = true;
-      return [{ t: 'echo', reel: dst, from: src, sym: s.s, sparks: this.sparks }];
+      return [{ t: 'echo', reel: dst, from: src, sym: s.s, sparks: this.sparks, borrowed: this.borrowedSparks(), cost: paid }];
     }
 
     canFateKey(ri) {
-      if (this.phase !== 'spun' || this.fight.keyLeft <= 0 || this.sparks < 1) return false;
+      if (this.phase !== 'spun' || this.fight.keyLeft <= 0 || this.sparkAvail() < 1) return false;
       if (ri == null) return this.reels.some((r) => !r.jam);
       return !!(this.reels[ri] && !this.reels[ri].jam);
     }
@@ -732,10 +807,99 @@
       const r = this.reels[ri];
       if (ci < 0 || ci >= r.strip.length) return [];
       this.fight.keyLeft -= 1;
-      this.sparks -= 1;
+      const paid = this._paySpark();
       r.pos = ci; r.echo = null;
       this.fight.manipulated = true;
-      return [{ t: 'fateKey', reel: ri, pos: ci, sym: r.strip[ci].s, sparks: this.sparks }];
+      return [{ t: 'fateKey', reel: ri, pos: ci, sym: r.strip[ci].s, sparks: this.sparks, borrowed: this.borrowedSparks(), cost: paid }];
+    }
+
+    // ------------------------------------------------------------------ 拍子木: send the Ashwheel's script one cell
+    // The current intent is struck out unplayed and the next cell becomes "now". No enemy turn passes
+    // (no burn tick, no growth, no rage). 1 per turn, 1 spark. A locked cell (強撃 / 灰燼) cannot be sent.
+    advanceBlock() {
+      if (!this.mods.script || this.phase !== 'spun' || !this.fight) return 'none';
+      const e = this.enemy;
+      if (!e || e.hp <= 0 || !e.intent) return 'none';
+      if (this.isLockedCell(e.intent)) return 'locked';
+      if (this.fight.advanced) return 'used';
+      if (this.sparkAvail() < 1) return 'spark';
+      return null;
+    }
+    canAdvance() { return this.advanceBlock() === null; }
+    advance() {
+      if (!this.canAdvance()) return [];
+      const e = this.enemy, f = this.fight;
+      const paid = this._paySpark();
+      const from = e.intent;
+      Run.scriptTick(e, from);
+      const it = this._nextCell(e);
+      e.intent = it;
+      e.now = it.now || null;
+      f.advanced = true; // (not a reel manipulation: 精妙 only rewards trines you made yourself)
+      this.stats.advances += 1;
+      return [{ t: 'scriptAdvance', from, intent: it, enemy: this._enemySnap(), cost: paid, sparks: this.sparks, borrowed: this.borrowedSparks() }];
+    }
+
+    // ------------------------------------------------------------------ 借り火: borrow one spark from the Ashwheel
+    // Only with no sparks, once per fight. The spark lives for this turn only (never stored). The price: the Ashwheel
+    // takes its NEXT script cell as well during this enemy turn (shown on the band before you borrow).
+    canBorrow() {
+      if (this.phase !== 'spun' || !this.mods.borrow || !this.mods.sparks || !this.fight) return false;
+      const e = this.enemy, f = this.fight;
+      if (!e || e.hp <= 0 || f.borrowUsed || f.debt || f.borrowed > 0 || this.sparks > 0) return false;
+      return true;
+    }
+    borrow() {
+      if (!this.canBorrow()) return [];
+      const f = this.fight;
+      f.borrowUsed = true;
+      f.borrowed = 1;
+      f.debt = true;
+      this.stats.borrows += 1;
+      return [{ t: 'borrow', borrowed: f.borrowed, sparks: this.sparks }];
+    }
+    // Would a borrowed spark change anything worth stopping for? (used to decide whether a 0-spark turn pauses)
+    borrowWorthwhile() {
+      if (!this.canBorrow()) return false;
+      const base = this.forecast().utility;
+      const GAIN = 7;
+      if (this.mods.nudge) {
+        const cur = this.paylineCells();
+        for (let i = 0; i < this.reels.length; i++) {
+          const r = this.reels[i];
+          if (r.held || r.jam) continue;
+          for (let d = 1; d <= this.mods.nudgeRange; d++) for (const dir of [-d, d]) {
+            const cells = cur.slice(); cells[i] = this.cellAt(i, dir);
+            if (this.evaluate(cells).utility - base >= GAIN) return true;
+          }
+        }
+      }
+      if (this.mods.echo && this.fight.echoLeft > 0) {
+        const cur = this.paylineCells();
+        for (let a = 0; a < cur.length; a++) for (let b = 0; b < cur.length; b++) {
+          if (a === b || this.reels[b].jam || cur[a].s === cur[b].s) continue;
+          const cells = cur.slice(); cells[b] = cur[a];
+          if (this.evaluate(cells).utility - base >= GAIN) return true;
+        }
+      }
+      if (this.mods.fateKey && this.fight.keyLeft > 0) {
+        const cur = this.paylineCells();
+        for (let i = 0; i < this.reels.length; i++) {
+          const r = this.reels[i];
+          if (r.jam) continue;
+          for (const c of r.strip) { const cells = cur.slice(); cells[i] = c; if (this.evaluate(cells).utility - base >= GAIN) return true; }
+        }
+      }
+      if (this.mods.script) {
+        const u = this._sim((c) => {
+          c.fight.borrowed = 1;
+          if (!c.canAdvance()) return null;
+          c.advance();
+          return c.enemy.intent.random ? null : c.forecast().utility; // a dice-drawn cell is not known in advance
+        });
+        if (u != null && u - base >= GAIN) return true;
+      }
+      return false;
     }
 
     // Nudges (within `range`) that would complete a trine (or the Bond formation when unlocked).
@@ -902,7 +1066,12 @@
         const dealt = Math.min(e.hp, Math.max(0, res.directDmg - (e.block || 0)) + res.reaper);
         if (e.hp - dealt > 0) res.reflectIn = Math.round(dealt * 0.5);
       }
-      if (res.pyre) res.totalDmg += (e.burn + res.burn) * 2;
+      if (res.pyre) {
+        let b = (e.burn || 0) + res.burn;
+        if (this.hasRelic('hatwax')) b = Math.min(12, b);
+        res.pyreDmg = Math.round(b * 2 * ((e.seals || 0) - res.sealBreaks > 0 ? 0.5 : 1));
+        res.totalDmg += res.pyreDmg;
+      }
       // utility: used for Wild assignment and by bots
       const incoming = e.intent && e.intent.k !== 'charge' ? this.intentDamage(e.intent) : 0;
       const blockUse = Math.min(res.block, Math.max(0, incoming - this.block)) + Math.max(0, res.block - incoming) * 0.15;
@@ -920,6 +1089,7 @@
       if (this.phase !== 'spun') return [];
       const ev = [];
       this.awaken.ready = false;
+      if (this.fight) this.fight.borrowed = 0;
       const out = this._resolveLine(ev, false);
       if (out === 'end') return ev;
       // 連鎖: one bonus spin + resolve before the enemy acts
@@ -936,7 +1106,7 @@
         if (out2 === 'end') return ev;
       }
       this._endPlayerTurn();
-      this._checkBossPhase(ev, false);
+      this._checkBossPhase(ev);
       return ev.concat(this._enemyTurn());
     }
 
@@ -1083,7 +1253,7 @@
       return 'ok';
     }
 
-    _checkBossPhase(ev, replan = true) {
+    _checkBossPhase(ev) {
       const e = this.enemy;
       if (!e || !e.boss || e.hp <= 0) return;
       let np = e.phase;
@@ -1093,8 +1263,6 @@
         e.phase = np;
         const d = this._gainSparks(1);
         ev.push({ t: 'bossPhase', phase: np, sparks: this.sparks, gained: d });
-        // re-plan the intent for the new phase so the player sees the new behaviour right away
-        if (replan) { this._newIntent(); ev.push({ t: 'intent', intent: e.intent, enemy: this._enemySnap() }); }
       }
     }
 
@@ -1117,15 +1285,62 @@
         this.stats.burnDealt += dmg;
         ev.push({ t: 'burnTick', dmg, hp: e.hp, stacks: e.burn });
         if (e.hp <= 0) return ev.concat(this._enemyDefeated());
-        this._checkBossPhase(ev, false);
+        this._checkBossPhase(ev);
       }
       f.burnedThisTurn = false;
       f.lanternSparkThisTurn = false;
       e.block = 0;
       const it = e.intent;
-      if (e.stunned) { e.stunned = false; ev.push({ t: 'stunned' }); }
-      else ev.push(...this._executeIntent(it));
-      e.lastK = it.k;
+      if (e.stunned) { e.stunned = false; ev.push({ t: 'stunned' }); e.lastK = it.k; }
+      else { ev.push(...this._executeIntent(it)); Run.scriptTick(e, it); }
+      let over = this._afterEnemyAct(ev);
+      if (over) return over;
+      // 怯み: the heavy follow-up is struck from the script unplayed
+      if (e.staggered) {
+        e.staggered = false;
+        if (it.k === 'charge') {
+          const skipped = this._nextCell(e);
+          Run.scriptTick(e, skipped);
+          e.lastK = 'staggered';
+          ev.push({ t: 'staggerCancel', skipped });
+        }
+      }
+      // 借り火: the Ashwheel collects its debt — it plays its next script cell now as well
+      if (f.debt) {
+        f.debt = false; f.debtCarried = false;
+        this._checkBossPhase(ev);
+        const d = this._nextCell(e);
+        const hp0 = this.hp;
+        ev.push({ t: 'debtAction', intent: d });
+        ev.push(...this._executeIntent(d));
+        Run.scriptTick(e, d);
+        this.stats.debtTaken += Math.max(0, hp0 - this.hp);
+        over = this._afterEnemyAct(ev);
+        if (over) return over;
+      }
+      // next turn
+      e.turn += 1;
+      f.turn += 1;
+      f.rampart = false; f.guardian = false; f.wardReflect = false;
+      if (f.chainReady) { f.chainUsed = false; f.chainReady = false; }
+      f.echoLeft = this.mods.echo ? 1 : 0;
+      f.keyLeft = this.mods.fateKey ? 1 : 0;
+      if (f.turn % 2 === 0) f.chainReady = true;
+      this._checkBossPhase(ev);
+      const nx = this._nextCell(e);
+      e.intent = nx;
+      e.now = nx.now || null;
+      const kept = this.mods.bulwark ? Math.floor(this.block * 0.5) : 0;
+      this.block = kept + (this.hasRelic('buckler') ? 2 : 0);
+      this.phase = 'idle';
+      ev.push({ t: 'newTurn', intent: e.intent, block: this.block, enemy: this._enemySnap(), sparks: this.sparks,
+        held: this.reels.map((r) => r.held), jam: this.reels.map((r) => r.jam) });
+      return ev;
+    }
+
+    // Deaths after an enemy action. Returns the final event list if the fight or the run ended.
+    _afterEnemyAct(ev) {
+      const e = this.enemy;
       if (e.hp <= 0) {
         if (this.hp <= 0) { this.hp = 1; ev.push({ t: 'cling', hp: 1 }); }
         return ev.concat(this._enemyDefeated());
@@ -1134,26 +1349,7 @@
         const sw = this._trySecondWind();
         if (sw) ev.push(sw); else return ev.concat(this._die(e));
       }
-      // next turn
-      e.turn += 1;
-      if (e.staggered) {
-        e.staggered = false;
-        if (it.k === 'charge') { e.turn += 1; e.lastK = 'staggered'; ev.push({ t: 'staggerCancel' }); }
-      }
-      f.turn += 1;
-      f.rampart = false; f.guardian = false; f.wardReflect = false;
-      if (f.chainReady) { f.chainUsed = false; f.chainReady = false; }
-      f.echoLeft = this.mods.echo ? 1 : 0;
-      f.keyLeft = this.mods.fateKey ? 1 : 0;
-      if (f.turn % 2 === 0) f.chainReady = true;
-      this._checkBossPhase(ev, false);
-      this._newIntent();
-      const kept = this.mods.bulwark ? Math.floor(this.block * 0.5) : 0;
-      this.block = kept + (this.hasRelic('buckler') ? 2 : 0);
-      this.phase = 'idle';
-      ev.push({ t: 'newTurn', intent: e.intent, block: this.block, enemy: this._enemySnap(), sparks: this.sparks,
-        held: this.reels.map((r) => r.held), jam: this.reels.map((r) => r.jam) });
-      return ev;
+      return null;
     }
 
     _attackParty(raw, heavy) {
@@ -1186,14 +1382,15 @@
         case 'attack': {
           ev.push(this._attackParty(atk(it.v), it.heavy));
           if (it.grow) { e.atkBonus += it.grow; ev.push({ t: 'enemyGrow', atkBonus: e.atkBonus }); }
-          if (it.doomTick) { e.doom = (e.doom || 3) - 1; ev.push({ t: 'doom', n: e.doom }); }
+          if (it.doomTick) ev.push({ t: 'doom', n: (e.doom || 3) - 1 });
           break;
         }
-        case 'doom': ev.push(this._attackParty(atk(it.v), true)); e.doom = 0; ev.push({ t: 'doom', n: 0, fired: true }); break;
+        case 'doom': ev.push(this._attackParty(atk(it.v), true)); ev.push({ t: 'doom', n: 0, fired: true }); break;
         case 'charge': ev.push({ t: 'enemyCharge', label: it.label }); break;
         case 'guard': e.block += it.v; ev.push({ t: 'enemyGuard', block: e.block }); break;
         case 'heal': {
           const b = e.hp; e.hp = Math.min(e.maxHp, e.hp + it.v);
+          this.stats.enemyHealed += e.hp - b;
           if (it.guard) e.block += it.guard;
           ev.push({ t: 'enemyHeal', amount: e.hp - b, hp: e.hp, block: e.block });
           break;
@@ -1221,6 +1418,157 @@
         default: ev.push({ t: 'enemyIdle' }); break;
       }
       return ev;
+    }
+
+    // ================================================================== previews (pure: never touch the real run or its RNG)
+    _clone() {
+      const c = Object.create(Run.prototype);
+      for (const k of Object.keys(this)) {
+        if (k === 'rng' || k === 'mods') continue;
+        const v = this[k];
+        c[k] = v === undefined ? undefined : JSON.parse(JSON.stringify(v));
+      }
+      c.mods = this.mods;
+      c.rng = U().makeRng(1);
+      c.rng.setState(this.rng.state());
+      c._preview = true;
+      return c;
+    }
+    _sim(fn) {
+      const uid = UID;
+      try { return fn(this._clone()); } finally { UID = uid; }
+    }
+
+    // What resolving the current payline now would do (exact, by resolving a copy of the run) — damage the party
+    // takes, the struck-out heavy (怯み), the debt cell (借り火), and the enemy's next intent.
+    // random: a 連鎖 bonus spin rolled dice, so the outcome is not knowable in advance.
+    previewTurn() {
+      if (this.phase !== 'spun' || !this.enemy) return null;
+      const chainArmed = !!(this.mods.chain && this.fight && !this.fight.chainUsed);
+      return this._sim((c) => {
+        // the copy resolves without the 連鎖 bonus spin: its dice are not peeked at
+        if (chainArmed) c.mods = Object.assign({}, c.mods, { chain: false });
+        const enemy0 = c.enemy;
+        const ev = c.resolve();
+        const firstKill = ev.some((x) => x.t === 'enemyDie');
+        // the bonus spin happens iff the first line had a combo and did not end the fight (the turn reaches the enemy)
+        const reachedEnemy = ev.some((x) => x.t === 'enemyTurn');
+        const chain = chainArmed && !!c._lastHadCombo && reachedEnemy && this.reels.some((r) => !r.held && !r.jam);
+        const P = { random: chain, chain, dice: false, damage: 0, debtRaw: 0, hits: [], reflect: null, skipped: null, debt: null, next: null, enemyAfter: null,
+          partyDies: c.phase === 'dead', enemyDies: firstKill, secondWind: ev.some((x) => x.t === 'secondWind'), hpAfter: c.hp };
+        void enemy0;
+        let inDebt = false;
+        for (const x of ev) {
+          if (x.t === 'staggerCancel') P.skipped = x.skipped || null;
+          if (x.t === 'debtAction') { P.debt = x.intent; inDebt = true; }
+          if (x.t === 'enemyAttack') {
+            P.damage += x.dmg;
+            P.hits.push({ raw: x.raw, blocked: x.blocked, dmg: x.dmg, heavy: !!x.heavy, debt: inDebt, back: x.thorns || 0 });
+            if (inDebt) P.debtRaw += x.raw;
+          }
+          if (x.t === 'reflect') { P.damage += Math.max(0, x.amount - x.blocked); P.reflectTaken = (P.reflectTaken || 0) + Math.max(0, x.amount - x.blocked); P.reflect = { amount: x.amount, blocked: x.blocked }; }
+          if (x.t === 'selfHit') P.damage += x.amount;
+        }
+        if (P.debt && P.debt.random) { P.dice = true; P.random = true; } // the debt cell came from the dice: damage / outcome are not knowable
+        P.fightGoesOn = !P.enemyDies && !P.partyDies && !!c.enemy && c.phase === 'idle';
+        if (P.fightGoesOn) { P.next = c.enemy.intent; P.enemyAfter = c._ghostOf(c.enemy); }
+        return P;
+      });
+    }
+    // The script after sending it one cell (拍子木), with the forecast that would follow.
+    previewAdvance() {
+      if (!this.canAdvance()) return null;
+      return this._sim((c) => {
+        c.advance();
+        const it = c.enemy.intent;
+        if (it.random) return { intent: Object.assign({}, UNKNOWN_CELL), unknown: true, R: null, band: null };
+        return { intent: it, unknown: false, R: c.forecast(), band: c.scriptBand() };
+      });
+    }
+    // A deterministic action (nudge / echo / key / bless / hold) tried on a copy: the forecast, the turn's outcome and the
+    // band that would follow it. Never used for respin (dice).
+    previewAfter(act) {
+      if (this.phase !== 'spun') return null;
+      return this._sim((c) => {
+        const ev = act(c);
+        if (!ev || !ev.length || c.phase !== 'spun') return null;
+        return { R: c.forecast(), turn: c.previewTurn(), band: c.scriptBand() };
+      });
+    }
+    // The script and the turn's outcome after borrowing (借り火): the debt cell shows on the band.
+    previewBorrow() {
+      if (!this.canBorrow()) return null;
+      return this._sim((c) => { c.borrow(); return { band: c.scriptBand(), turn: c.previewTurn() }; });
+    }
+
+    // A read-only copy of what ai() reads, for walking the script forward.
+    _ghostOf(e) {
+      return { id: e.id, boss: !!e.boss, hp: e.hp, maxHp: e.maxHp, turn: e.turn, cursor: e.cursor || 0, lastK: e.lastK, doom: e.doom,
+        markIdx: e.markIdx, phase: e.phase, seals: e.seals, atkBonus: e.atkBonus, atkMult: e.atkMult };
+    }
+    // Read the next cell on a copy. Dice are never rolled: a cell that needs them comes back unknown.
+    _ghostNext(g) {
+      g.cursor += 1;
+      let random = false;
+      const roll = () => { random = true; return 0.5; };
+      const rng = { next: roll, int: () => { roll(); return 0; }, chance: () => { roll(); return false; }, pick: (a) => { roll(); return a[0]; },
+        range: (lo) => { roll(); return lo; }, weighted: (a) => { roll(); return a[0]; }, shuffle: (a) => { roll(); return a; } };
+      const it = D().ENEMIES[g.id].ai(g, { rng, mostStocked: () => this.mostStocked(), floor: this.floor });
+      return random ? Object.assign({}, UNKNOWN_CELL) : it;
+    }
+    _ghostPlay(g, it) { Run.scriptTick(g, it); if (it && it.grow) g.atkBonus += it.grow; }
+    // Could a boss act change (all seals broken / HP under 30%) before a cell `turnsAhead` enemy turns away is read?
+    _bossCond(g, turnsAhead) {
+      if (!g.boss) return null;
+      if (g.seals > 0) {
+        const perTurn = this.mods.skullPact ? 99 : this.mods.chain ? 2 : 1;
+        return g.seals <= perTurn * turnsAhead ? 'seal' : null;
+      }
+      return g.phase < 3 ? 'hp' : null;
+    }
+
+    // 灰輪の台本 as the player may read it: now + the next two cells, plus the struck-out heavy (怯み) and the debt cell
+    // (借り火) when this turn's resolve will produce them. In 'spun' the next cell comes from resolving a copy of the run
+    // with the current payline, so it is exactly what will happen. Cells are never guessed: dice -> unknown,
+    // a possible boss act change -> cond ('seal' | 'hp'), a 連鎖 bonus spin -> cond 'chain'.
+    scriptBand() {
+      const e = this.enemy;
+      if (!e || !e.intent || e.hp <= 0) return null;
+      const cells = [];
+      const add = (role, it, g, cond) => cells.push({ role, it, dmg: this.cellDamage(it, g), locked: this.isLockedCell(it),
+        unknown: !!(it && it.unknown), cond: cond || null });
+      add('now', e.intent, e, null);
+      if (this.phase === 'spun') {
+        const P = this.previewTurn();
+        if (!P || !P.fightGoesOn) return { cells, spun: true, outcome: P, ends: P ? (P.enemyDies ? 'enemy' : P.partyDies ? 'party' : null) : null };
+        const g = P.enemyAfter;
+        const chainC = P.chain ? 'chain' : null;
+        if (P.skipped) add('skip', P.skipped, g, chainC);
+        if (P.debt) {
+          if (P.debt.random) add('debt', Object.assign({}, UNKNOWN_CELL), g);
+          else { add('debt', P.debt, g, chainC); if (!chainC) cells[cells.length - 1].dmg = P.debtRaw || cells[cells.length - 1].dmg; }
+        }
+        // after a dice-drawn debt cell, what follows depends on that roll too
+        const nx = P.next.random || P.dice ? Object.assign({}, UNKNOWN_CELL) : P.next;
+        const stag = nx.k === 'charge' ? 'stagger' : null; // a ward pair next turn would strike the heavy after it
+        const cond2 = chainC || this._bossCond(g, 1) || stag;
+        add('next', nx, g, chainC);
+        this._ghostPlay(g, nx); g.turn += 1;
+        const n2 = P.dice ? Object.assign({}, UNKNOWN_CELL) : this._ghostNext(g);
+        add('next2', n2, g, cond2);
+        return { cells, spun: true, outcome: P };
+      }
+      const g = this._ghostOf(e);
+      const stag1 = e.intent.k === 'charge' ? 'stagger' : null; // two wards on the coming spin strike the heavy out
+      const c1 = this._bossCond(g, 1) || stag1, c2 = this._bossCond(g, 2) || (stag1 ? 'shift' : null);
+      this._ghostPlay(g, e.intent);
+      if (this.fight && this.fight.debt) { const d = this._ghostNext(g); add('debt', d, g, this._bossCond(g, 1)); this._ghostPlay(g, d); }
+      g.turn += 1;
+      const n1 = this._ghostNext(g);
+      add('next', n1, g, c1);
+      this._ghostPlay(g, n1); g.turn += 1;
+      add('next2', this._ghostNext(g), g, c2 || (n1.k === 'charge' ? 'stagger' : null));
+      return { cells, spun: false };
     }
 
     _gainEmbers(n, src) {
@@ -1251,6 +1599,7 @@
       const d = this._gainSparks(m.sparkPerWin);
       if (d > 0) ev.push({ t: 'sparks', delta: d, total: this.sparks, max: this.maxSparks, src: 'win' });
       const wasMimic = e.id === 'mimic';
+      if (this.fight && this.fight.debt) this.debtCarry = true;
       this.enemy = null;
       this.fight = null;
       if (!wasMimic) this.pending.unshift(e.elite || e.dread ? 'relic' : 'carving');

@@ -17,8 +17,10 @@
 | 発動列のマスをクリック / 1・2・3 | 留め（灯紋【再演と留め】） |
 | R | 再演 |
 | E / K | 写し身 / 運命の鍵（終盤の灯紋） |
+| S | 台本送り（灯紋【拍子木】）: 敵の台本を1コマ送る |
+| B | 灰輪に借りる（灯紋【借り火】）: 火種0のとき1戦1回 |
 | Shift 長押し | 早送り |
-| 敵にカーソル | 敵の特徴と次の行動の説明 |
+| 敵にカーソル | 敵の特徴と次の行動の説明（台本の小札にも説明が出る） |
 
 進行は自動保存（localStorage）。右下の ⚙ から音量・演出速度・進行リセット。
 
@@ -27,4 +29,5 @@
 - `js/art/` 手続き描画のアート（画像ファイル不使用） / `js/audio/` Web Audio 合成サウンド
 - `js/game/` 演出・UI・画面
 - `docs/GDD.md` 企画書、`docs/ARCH.md` モジュール契約
-- `tools/sim.js` バランスシミュレーション（`node tools/sim.js campaign balanced 10` など）、`tools/fuzz.js` エンジンの不変条件テスト
+- `tools/sim.js` バランスシミュレーション（`node tools/sim.js campaign balanced 10`、`metrics balanced 20`、`script 150` など）、`tools/fuzz.js` エンジンの不変条件テスト、`tools/test_script.js` 灰輪の台本・借り火のユニット／回帰（初期版との並走比較）／ボス試験
+- `docs/PHASE2_ALITE_IMPLEMENTATION.md` Phase 2（灰輪の台本＋残り火の一手）の実装記録

@@ -363,16 +363,35 @@
       ctx.fillStyle = '#3a2614'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#1a1222'; ctx.stroke();
       ctx.fillStyle = 'rgba(232,191,106,0.6)'; ctx.fillRect(p0.x - 20, 440, p1.x - p0.x + 84, 2);
       ctx.restore();
+      const borrowed = st.borrowed || 0;
       for (let k = 0; k < max; k++) {
         const p = this.candlePos(k, max);
         const lit = k < cur;
-        const spending = lit && k >= cur - pend;
+        // a borrowed spark is spent first
+        const spending = lit && !borrowed && k >= cur - pend;
         ctx.save();
         if (spending) ctx.globalAlpha = 0.45 + 0.35 * Math.sin(this.time * 14);
         if (SD.Art.drawSparkCandle) SD.Art.drawSparkCandle(ctx, p.x, p.y, lit, this.time + k * 0.37, { flare: this.candleFlare[k] || 0, size: 34 });
         ctx.restore();
       }
-      SD.StageDraw.numText(ctx, `${cur}/${max}`, p1.x + 40, 444, 15, cur ? '#ffe1a0' : '#a08a9a');
+      // 借り火: a stub of ash-red wax lent by the Ashwheel, burning for this turn only
+      if (borrowed > 0) {
+        const b = this.borrowPos();
+        ctx.save();
+        if (pend > 0 || st.pendingCost) ctx.globalAlpha = 0.45 + 0.35 * Math.sin(this.time * 14);
+        SD.Art.glow(ctx, b.x, b.y - 28, 30, 'rgba(255,80,70,0.85)', 0.7 + 0.2 * Math.sin(this.time * 9));
+        if (SD.Art.drawSparkCandle) SD.Art.drawSparkCandle(ctx, b.x, b.y, true, this.time * 1.7, { flare: 0.4, size: 30 });
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = 'rgba(170,40,50,0.45)'; ctx.fillRect(b.x - 14, b.y - 50, 28, 50);
+        ctx.restore();
+        SD.StageDraw.numText(ctx, '借', b.x, b.y - 56, 12, '#ff9a8a');
+      }
+      SD.StageDraw.numText(ctx, `${cur}/${max}`, p1.x + 40 + (borrowed ? 34 : 0), 444, 15, cur || borrowed ? '#ffe1a0' : '#a08a9a');
+    }
+
+    borrowPos() {
+      const max = this.run.maxSparks, p1 = this.candlePos(max - 1, max);
+      return { x: p1.x + 38, y: 450 };
     }
 
     flareCandle(k) { this.candleFlare[k] = 1; }

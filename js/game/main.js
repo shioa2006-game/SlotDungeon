@@ -95,6 +95,21 @@
     sp.appendChild(sw);
     box.appendChild(sp);
     box.appendChild(U.el('div', 'set-note', 'Shift を押している間は早送り'));
+    // a trine/bond waits for the player once 継ぎ留め / 拍子木 are lit (can be turned off)
+    const cp = U.el('div', 'set-row');
+    cp.appendChild(U.el('span', '', '三連で止まる<small style="display:block;color:#b9ad95">継ぎ留め・拍子木の後</small>'));
+    const cw = U.el('div', 'speed-btns');
+    for (const [v, lbl] of [['smart', '止まる'], ['off', 'すぐ発動']]) {
+      const bb = U.button(lbl, 'mini' + ((p.settings.comboPause || 'smart') === v ? ' on' : ''), () => {
+        p.settings.comboPause = v; Game.save();
+        [...cw.children].forEach((c) => c.classList.toggle('on', c === bb));
+        const scr = Game.screen;
+        if (scr && scr.run && scr.run.mods) scr.run.mods.comboPause = SD.Meta.computeMods(p).comboPause;
+      });
+      cw.appendChild(bb);
+    }
+    cp.appendChild(cw);
+    box.appendChild(cp);
     if (inRun && onGiveUp) box.appendChild(U.button('この降下を終える', 'secondary', () => onGiveUp()));
     const reset = U.button('進行をリセット', 'danger', () => {
       if (!reset.dataset.armed) { reset.dataset.armed = '1'; reset.innerHTML = '本当に消す？（もう一度押す）'; return; }

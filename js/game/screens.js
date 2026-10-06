@@ -344,6 +344,10 @@ const TREE_SX = 1.12;
       this.comboCells = null;
       this.intent = null;
       this.hoverPreview = null;
+      this.band = null;          // 灰輪の台本 as currently readable (engine scriptBand())
+      this.turnPrev = null;      // exact outcome of resolving the current payline now (engine previewTurn())
+      this.hoverPrev = null;     // { R, turn, band, caption } while hovering an action
+      this.bandSlide = 0;
       this.firstRun = this.profile.stats.runs === 0;
       // the next 灯紋 within reach: shown under the embers plaque, celebrated when this run pays for it
       const goal = SD.Meta.recommendedNode(this.profile, this.profile.seen.lastWhisper);
@@ -351,7 +355,7 @@ const TREE_SX = 1.12;
       this.turnHints = {};
       this.V = {
         hp: this.run.hp, hpShown: this.run.hp, hpGhost: this.run.hp, maxHp: this.run.maxHp, block: 0,
-        sparks: this.run.sparks, embers: 0, enemy: null,
+        sparks: this.run.sparks, borrowed: 0, embers: 0, enemy: null,
       };
       this.scene.curtain = 1; this.scene.curtainTarget = 1;
       SD.FX.clear();
@@ -399,14 +403,20 @@ const TREE_SX = 1.12;
       this.dom.echo = U.button('写し身', 'mini', () => this.toggleMode('echo'));
       this.dom.key = U.button('運命の鍵', 'mini', () => this.toggleMode('key'));
       this.dom.row.appendChild(this.dom.echo); this.dom.row.appendChild(this.dom.key);
+      // 灰輪の台本: send the script (拍子木) / borrow from the Ashwheel (借り火)
+      this.dom.srow = U.el('div', 'btn-row script-row');
+      this.dom.advance = U.button('台本送り', 'mini script', () => this.doAdvance());
+      this.dom.borrow = U.button('灰輪に借りる', 'mini borrow', () => this.doBorrow());
+      this.dom.srow.appendChild(this.dom.advance); this.dom.srow.appendChild(this.dom.borrow);
       this.dom.help = U.el('div', 'help-line');
-      for (const [k, b] of [['respin', this.dom.respin], ['echo', this.dom.echo], ['key', this.dom.key]]) {
-        b.addEventListener('mouseenter', () => { this.btnHover = k; });
-        b.addEventListener('mouseleave', () => { if (this.btnHover === k) this.btnHover = null; });
+      for (const [k, b] of [['respin', this.dom.respin], ['echo', this.dom.echo], ['key', this.dom.key], ['advance', this.dom.advance], ['borrow', this.dom.borrow]]) {
+        b.addEventListener('mouseenter', () => { this.btnHover = k; if (k === 'advance' || k === 'borrow') this.previewButton(k); });
+        b.addEventListener('mouseleave', () => { if (this.btnHover === k) this.btnHover = null; if (k === 'advance' || k === 'borrow') this.clearHoverPrev(); });
       }
       this.dom.right.appendChild(this.dom.primary);
       this.dom.right.appendChild(this.dom.respin);
       this.dom.right.appendChild(this.dom.row);
+      this.dom.right.appendChild(this.dom.srow);
       this.dom.right.appendChild(this.dom.help);
       root.appendChild(this.dom.right);
       this.dom.hint = U.el('div', 'hint-bubble passthru');
@@ -488,10 +498,11 @@ const TREE_SX = 1.12;
       return ev;
     }
 
-    setIntent(it) {
+    setIntent(it, opts) {
       if (this._tipOn) { SD.UI.hideTip(); this._tipOn = false; }
-      this.intent = it ? SD.UI.intentInfo(this.run, it, this.run.enemy) : null;
-      if (this.intent) this.intent.born = this.scene.time;
+      this.intent = it ? SD.UI.intentInfo(this.run, it, this.run.enemy, { band: SD.UI.bandVisible(this.run) }) : null;
+      if (this.intent) { this.intent.born = this.scene.time; if (opts && opts.debt) this.intent.debt = true; }
+      if (!(opts && opts.debt)) this.refreshBand();
       if (it && this.scene.enemy) {
         const danger = it.k === 'charge' || it.k === 'doom' || (it.heavy && it.k === 'attack');
         const stance = it.now && (it.now.k === 'curl' || it.now.k === 'reflect');
@@ -500,6 +511,40 @@ const TREE_SX = 1.12;
       if (this.V.enemy && this.run.enemy) {
         const now = this.run.enemy.now;
         this.V.enemy.armorNow = (this.run.enemy.armor || 0) + (now && now.k === 'curl' ? now.v : 0);
+      }
+    }
+
+    // Re-read the script band and the exact outcome of the current payline (only when the game state changed).
+    refreshBand() {
+      const run = this.run;
+      this.band = null; this.turnPrev = null;
+      if (!run.enemy || run.enemy.hp <= 0) return;
+      if (SD.UI.bandVisible(run)) {
+        this.band = run.scriptBand();
+        if (this.band && this.band.spun) this.turnPrev = this.band.outcome || null;
+      } else if (run.phase === 'spun') this.turnPrev = run.previewTurn();
+      if (this.intent && run.enemy.intent) this.intent.locked = run.isLockedCell(run.enemy.intent);
+    }
+    clearHoverPrev() {
+      if (!this.hoverPrev) return;
+      this.hoverPrev = null;
+      if (this.state === 'decision') this.renderLeft(this.run.forecast());
+    }
+    // Hovering 台本送り / 灰輪に借りる: show the script (and forecast) that would follow.
+    previewButton(kind) {
+      const run = this.run;
+      if (this.state !== 'decision') return;
+      if (kind === 'advance') {
+        const P = run.previewAdvance();
+        if (!P) return;
+        const I = SD.UI.intentInfo(run, P.intent, run.enemy, { band: true });
+        this.hoverPrev = { R: P.R, turn: P.band && P.band.outcome, band: P.band, caption: '送ると…', intentI: I, unknown: P.unknown };
+        this.renderLeft(P.R || run.forecast(), P.unknown ? '送ると…（何が来るかはサイコロ次第）' : '送ると…', P.R ? this.hoverPrev.turn : null);
+      } else {
+        const P = run.previewBorrow();
+        if (!P) return;
+        this.hoverPrev = { R: null, turn: P.turn, band: P.band, caption: '借りると…' };
+        this.renderLeft(run.forecast(), '借りると…', P.turn);
       }
     }
 
@@ -516,11 +561,20 @@ const TREE_SX = 1.12;
       this.state = 'idle';
       this.mode = null;
       this.hoverPreview = null;
+      this.hoverPrev = null;
       this.reels.lever.target = 0;
+      this.refreshBand();
       this.refreshButtons();
       this.renderLeft();
       if (this.firstRun && !this.turnHints.lever) {
         this.showHint('レバーを引く <kbd>Space</kbd>', 1150, 455, 0, 'down');
+      }
+      // the first time the enemy's script is readable: point at it once
+      if (this.band && !this.profile.seen.band && this.scene.enemy) {
+        this.profile.seen.band = true; SD.Game.save();
+        const e = this.scene.enemy, boss = this.run.enemy.boss;
+        // to the left of the plaque, so the band itself stays readable
+        this.showHint('<b>灰輪の台本</b>：敵の予告は「今 → 次 → その次」と並んでいる（右の小札）。<br>盾2つで怯ませた強撃は、台本から消える。', boss ? 520 : e.x - 250, boss ? 330 : 262, 7);
       }
     }
 
@@ -550,6 +604,7 @@ const TREE_SX = 1.12;
       const auto = run.shouldAutoResolve();
       if (auto) {
         this.state = 'auto';
+        this.refreshBand();
         this.renderLeft(run.forecast());
         this.refreshButtons();
         let beat = fromManip ? 0.28 : 0.35;
@@ -570,12 +625,14 @@ const TREE_SX = 1.12;
     enterDecision() {
       this.state = 'decision';
       this.reels.lever.target = 0.45;
+      this.hoverPrev = null;
+      this.refreshBand();
       this.refreshButtons();
       this.renderLeft(this.run.forecast());
       this.maybeVerbHint();
     }
 
-    leaveDecision() { this.hideHint(); this.closePicker(); this.mode = null; this.hoverPreview = null; }
+    leaveDecision() { this.hideHint(); this.closePicker(); this.mode = null; this.hoverPreview = null; this.hoverPrev = null; }
 
     async doResolve() {
       if (this.run.phase !== 'spun') return;
@@ -610,8 +667,26 @@ const TREE_SX = 1.12;
       if (this.state !== 'decision') return;
       const ev = this.run.toggleHold(i);
       this.director.play(ev);
+      this.refreshBand();
       this.renderLeft(this.run.forecast());
       this.refreshButtons();
+    }
+
+    // 拍子木: send the Ashwheel's script one cell
+    async doAdvance() {
+      if (this.state !== 'decision' || !this.run.canAdvance()) { if (this.state === 'decision' && SD.Audio) SD.Audio.play('ui_deny'); return; }
+      this.hoverPrev = null; this.btnHover = null;
+      this.state = 'anim';
+      await this.play(this.run.advance());
+      this.afterManip();
+    }
+    // 借り火: borrow one spark for this turn; the Ashwheel takes its next cell too
+    async doBorrow() {
+      if (this.state !== 'decision' || !this.run.canBorrow()) { if (this.state === 'decision' && SD.Audio) SD.Audio.play('ui_deny'); return; }
+      this.hoverPrev = null; this.btnHover = null;
+      this.state = 'anim';
+      await this.play(this.run.borrow());
+      if (this.run.phase === 'spun') this.enterDecision();
     }
 
     afterManip() {
@@ -669,6 +744,9 @@ const TREE_SX = 1.12;
       if (m.bless && this.run.canBlessAny() && show('bless', '髑髏の「祝」を押すと、トトが癒に変える', 640, 440)) return;
       if (m.echo && this.run.canEchoAny() && show('echo', '【写し身】発動列の記号を、別のリールへ写せる', 1000, 440)) return;
       if (m.fateKey && this.run.canFateKey() && show('key', '【運命の鍵】リボンから好きなコマを選べる', 1000, 440)) return;
+      if (m.script && this.run.canAdvance() && show('script', '【台本送り】火種1で灰輪の台本を1コマ送る。今の予告は行われず、<b>次の行動が今</b>になる。<br>強撃を早く呼ぶことも、蘇生を飛ばすこともできる', 960, 440)) return;
+      if (m.borrow && this.run.canBorrow() && show('borrow', '火種が尽きた。【灰輪に借りる】と、このターンだけ一手動ける。<br>代わりに灰輪は<b>次の行動もこのターンに</b>行う（台本で確かめて）', 960, 440)) return;
+      if (this.run.comboPauseReason() && show('comboPause', '揃った三連でも、すぐには発動しない。<br>継ぎ留め・台本送りを先に使える。そのまま発動は <kbd>Space</kbd>', 640, 440)) return;
     }
 
     showHint(html, x, y, life, arrow) {
@@ -687,8 +765,9 @@ const TREE_SX = 1.12;
     onCombo() { /* the director handles the celebration */ }
 
     // ------------------------------------------------------------------ left panel (forecast)
-    renderLeft(R, label) {
+    renderLeft(R, label, T) {
       const U = UI(), run = this.run, el = this.dom.left;
+      if (T === undefined) T = this.hoverPrev ? this.hoverPrev.turn : this.turnPrev;
       el.innerHTML = '';
       const e = run.enemy;
       if (!R || (this.state !== 'decision' && this.state !== 'auto')) {
@@ -748,7 +827,32 @@ const TREE_SX = 1.12;
         if (R.sealBreaks) out.innerHTML += ` <span class="seal">封印-${R.sealBreaks}</span>`;
         el.appendChild(out);
         const it = e.intent;
-        if (it && after > 0) {
+        // a trine that waits: say why, once the player can plan around it
+        const why = this.state === 'decision' && !label ? run.comboPauseReason() : null;
+        if (why) {
+          const txt = { overheal: '回復が溢れる三連。別の目にするか、このまま発動', idleWard: '受ける攻撃のない盾の三連。蓄えか、別の目か', script: '台本を送ってから発動することもできる', plan: '留め・継ぎ留めを決めてから発動できる' }[why];
+          el.appendChild(U.el('div', 'fc-pause', txt + ' <kbd>Space</kbd>'));
+        }
+        if (after > 0 && T && !T.random && T.hits) {
+          // exact: resolve-now outcome, including a debt to the Ashwheel and what blocks are left after reflection
+          const main = T.hits.filter((h) => !h.debt), debt = T.hits.filter((h) => h.debt);
+          const sum = (a, k) => a.reduce((s2, h) => s2 + h[k], 0);
+          if (T.reflect) el.appendChild(U.el('div', 'fc-in', `反射 ${T.reflect.amount}${T.reflect.blocked ? '（盾で ' + T.reflect.blocked + '）' : ''}`));
+          else if (R.reflectIn) el.appendChild(U.el('div', 'fc-in', `反射 ${R.reflectIn}`));
+          if (T.debt) {
+            const DI = SD.UI.cellInfo(run, { it: T.debt, dmg: null });
+            el.appendChild(U.el('div', 'fc-in', `<b class="debt">借りの一手</b>：${DI.label}${T.debt.k === 'guard' || T.debt.k === 'heal' || T.debt.k === 'hex' ? ' ' + T.debt.v : ''} もこのターンに`));
+          }
+          if (main.length || debt.length) {
+            const dmg = sum(main, 'dmg') + sum(debt, 'dmg') + (T.reflectTaken || 0);
+            const lethal = T.partyDies || T.secondWind;
+            const back = sum(main, 'back') + sum(debt, 'back');
+            el.appendChild(U.el('div', 'fc-in', `予告 ${sum(main, 'raw')}${debt.length ? ` <b class="debt">＋借り ${sum(debt, 'raw')}</b>` : ''} − 盾 ${sum(main, 'blocked') + sum(debt, 'blocked')} → <b class="${lethal ? 'hurt lethal' : dmg ? 'hurt' : 'safe'}">${lethal ? '致命' : '被ダメ ' + dmg}</b>${back ? ` <b class="back">返す ${back}</b>` : ''}`));
+          } else if (it && it.k === 'charge') {
+            el.appendChild(U.el('div', 'fc-in', R.stagger ? '<b class="safe">強撃を阻止できる（台本から消える）</b>' : '次は強撃。盾2つで怯ませられる'));
+          } else if (T.partyDies) el.appendChild(U.el('div', 'fc-in', '<b class="hurt lethal">致命</b>'));
+        } else if (it && after > 0) {
+          if (run.fight && run.fight.debt) el.appendChild(U.el('div', 'fc-in', '<b class="debt">借りの一手</b>：中身はサイコロ次第（このターンに行われる）'));
           const inc = run.intentDamage(it);
           if ((it.k === 'attack' || it.k === 'doom' || it.k === 'jam') && inc > 0) {
             let blk = run.block + R.block;
@@ -784,7 +888,7 @@ const TREE_SX = 1.12;
       const held = run.reels.filter((r) => r.held).length;
       let s = `再演すると 三連 <b>${SD.UI.pct(Math.min(1, trine))}</b>`;
       if (run.mods.bond) s += ` ／ 絆 <b>${SD.UI.pct(bond)}</b>`;
-      if (!held) s += '<br><small>発動列のマスで留められる</small>';
+      if (!held && !this.dom.right.classList.contains('dense')) s += '<br><small>発動列のマスで留められる</small>';
       return s;
     }
 
@@ -812,6 +916,27 @@ const TREE_SX = 1.12;
       d.row.style.display = run.mods.echo || run.mods.fateKey ? '' : 'none';
       d.echo.innerHTML = '写し身 <small>火種1</small> <kbd>E</kbd>';
       d.key.innerHTML = '運命の鍵 <small>火種1</small> <kbd>K</kbd>';
+      // 灰輪の台本
+      const f = run.fight;
+      const showAdv = !!run.mods.script;
+      const showBor = !!run.mods.borrow && !!f && (run.sparks === 0 || f.borrowUsed);
+      d.srow.style.display = showAdv || showBor ? '' : 'none';
+      // many verbs lit: a tighter panel so everything stays on the stage
+      d.right.classList.toggle('dense', showAdv || showBor);
+      d.advance.style.display = showAdv ? '' : 'none';
+      d.borrow.style.display = showBor ? '' : 'none';
+      if (showAdv) {
+        const blk = run.phase === 'spun' ? run.advanceBlock() : 'none';
+        d.advance.disabled = !(st === 'decision' && blk === null);
+        d.advance.innerHTML = `台本送り <small>${blk === 'locked' ? '強撃は送れない' : blk === 'used' ? '済' : run.borrowedSparks() ? '借り火' : '火種1'}</small> <kbd>S</kbd>`;
+        d.advance.title = blk === 'locked' ? '溜め終えた一撃（強撃・灰燼）は台本から外せない' : blk === 'used' ? '台本送りは1ターン1回' : blk === 'spark' ? '火種が足りない' : '今の予告を飛ばし、次の行動を今にする（火種1）';
+      }
+      if (showBor) {
+        d.borrow.disabled = !(st === 'decision' && run.canBorrow());
+        d.borrow.innerHTML = f.borrowUsed ? (f.borrowed ? '借りた火種' : '借り済み') : '灰輪に借りる';
+        d.borrow.classList.toggle('on', !!f.borrowed);
+        d.borrow.title = '[B] 1戦1回、火種0のとき：このターンだけ使える火種を1つ借りる。代わりに灰輪は台本の次の行動もこのターンに行う';
+      }
       this.refreshHelp();
     }
 
@@ -1136,6 +1261,12 @@ const TREE_SX = 1.12;
       add('longpush', s.markHits, 2, `封じられた目を <b>${s.markHits}</b> 回出してしまった。2つ先まで届けば…`);
       add('deft', s.zeroSpark >= 4 ? s.zeroSpark : 0, 1.2, `火種が尽きていたターン: <b>${s.zeroSpark}</b>`);
       add('keeper', k && k.boss ? 1 : 0, 3, '灰輪の主の前で、灯が持ちこたえられなかった');
+      // 灰輪の台本
+      add('borrow', (s.lockedTurns || 0) >= 2 || (summary.sparksLeft === 0 && s.zeroSpark >= 3) ? Math.max(s.lockedTurns || 0, s.zeroSpark) : 0, 1.5,
+        `火種が尽き、回すしかなかったターン: <b>${Math.max(s.lockedTurns || 0, s.zeroSpark)}</b>。灰輪に一手を借りられたら…`);
+      if ((s.enemyHealed || 0) >= 15) add('hyoshigi', Math.round(s.enemyHealed / 5), 1, `敵に取り戻されたHP: <b>${s.enemyHealed}</b>。台本の「蘇生」を飛ばせたら…`);
+      else if (s.heavyTaken >= 12) add('hyoshigi', Math.round(s.heavyTaken / 6), 1, `強撃で受けた傷: <b>${s.heavyTaken}</b>。強撃が来る時を、自分で選べたら…`);
+      if (k && k.boss && !k.seals) add('hyoshigi', 1, 6, '逆廻りの封じは、決まった順で巡ってくる。その順を自分で進められたら…');
       for (const c of cands) c.dataDriven = true;
       cands.sort((a, b) => {
         const ca = SD.Meta.canUnlock(p, a.node) ? 1 : 0, cb = SD.Meta.canUnlock(p, b.node) ? 1 : 0;
@@ -1253,6 +1384,8 @@ const TREE_SX = 1.12;
       if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') this.doHold(+e.code.slice(-1) - 1);
       if (e.code === 'KeyE') this.toggleMode('echo');
       if (e.code === 'KeyK') this.toggleMode('key');
+      if (e.code === 'KeyS') this.doAdvance();
+      if (e.code === 'KeyB') this.doBorrow();
       if (e.code === 'Escape') { this.closePicker(); this.mode = null; this.refreshButtons(); this.renderLeft(this.run.forecast()); }
     }
 
@@ -1271,6 +1404,7 @@ const TREE_SX = 1.12;
         ribbonActive: (i, idx) => dec && this.ribbonAction(i, idx) != null,
         mode: this.mode,
         sparks: this.V.sparks,
+        borrowed: this.V.borrowed || 0,
         pendingCost: dec ? this.pendingCost() : 0,
         marked: run.enemy && run.enemy.now && run.enemy.now.k === 'mark' ? run.enemy.now.sym : null,
         forecast: this.fc,
@@ -1287,6 +1421,7 @@ const TREE_SX = 1.12;
       if (this.btnHover === 'respin') return run.respinCost() === 'spark' ? 1 : 0;
       if (this.btnHover === 'echo' || (this.mode && this.mode.kind === 'echo')) return 1;
       if (this.btnHover === 'key' || (this.mode && this.mode.kind === 'key')) return 1;
+      if (this.btnHover === 'advance') return run.canAdvance() ? 1 : 0;
       if (h && h.kind === 'cell' && h.row !== 0 && run.canNudge(h.reel, h.row)) return run.nudgeCost() === 'spark' ? 1 : 0;
       if (h && h.kind === 'ribbon' && this.ribbonAction(h.reel, h.index)) return run.nudgeCost() === 'spark' ? 1 : 0;
       return 0;
@@ -1295,6 +1430,8 @@ const TREE_SX = 1.12;
     predictedLoss() {
       const run = this.run, e = run.enemy;
       if (!e || !e.intent || !(this.state === 'idle' || this.state === 'decision' || this.state === 'auto')) return 0;
+      const T = this.hoverPrev ? this.hoverPrev.turn : this.turnPrev;
+      if (run.phase === 'spun' && T && !T.random) return T.partyDies || T.secondWind ? Math.max(T.damage, run.hp) : T.damage;
       const it = e.intent;
       if (!(it.k === 'attack' || it.k === 'doom' || it.k === 'jam')) return 0;
       const R = this.hoverPreview || this.fc;
@@ -1304,6 +1441,16 @@ const TREE_SX = 1.12;
       if (R && R.totalDmg >= e.hp + (e.block || 0)) return 0; // the enemy falls first
       const self = R ? R.selfDmg : 0;
       return (R && R.guardian ? 0 : Math.max(0, run.intentDamage(it) - blk)) + refl + self;
+    }
+
+    // A manipulation being hovered: forecast + exact turn outcome + the script band that would follow.
+    hoverManip(act, label) {
+      const run = this.run;
+      const P = act ? run.previewAfter(act) : null;
+      if (!P) { this.hoverPreview = null; this.hoverPrev = null; this.renderLeft(run.forecast()); return; }
+      this.hoverPreview = P.R;
+      this.hoverPrev = { R: P.R, turn: P.turn, band: SD.UI.bandVisible(run) ? P.band : null, caption: null };
+      this.renderLeft(P.R, label, P.turn);
     }
 
     previewEval(cells) {
@@ -1327,10 +1474,17 @@ const TREE_SX = 1.12;
 
     onMouseMove(x, y) {
       if (this.modalOpen || this.state === 'end') { this.reels.hover = null; return; }
+      // the script band's cells
+      const bandHit = (this.scene.bandRects || []).find((r) => x >= r.x - 3 && x <= r.x + r.w + 3 && y >= r.y - 3 && y <= r.y + r.h + 3);
+      if (bandHit && this.run.enemy) {
+        SD.UI.showTip(SD.UI.cellExplain(this.run, bandHit.cell), x, y);
+        this._tipOn = true;
+        this._bandTip = true;
+      } else if (this._bandTip) { SD.UI.hideTip(); this._bandTip = false; this._tipOn = false; }
       // enemy / intent tooltip
       const en = this.scene.enemy, re = this.run.enemy;
       let onEnemy = false;
-      if (en && re && y < 440) {
+      if (en && re && y < 440 && !bandHit) {
         const info = en.info(), w = info.width || 120;
         const top = en.y + (info.head ? info.head[1] : -info.height) - 80;
         onEnemy = x > en.x - w / 2 - 40 && x < en.x + w / 2 + 90 && y > top && y < en.y + 40;
@@ -1339,8 +1493,8 @@ const TREE_SX = 1.12;
             + `<br><span style="color:#b9ad95">${re.tip || ''}</span><br>${SD.UI.intentExplain(this.run, re.intent)}`, x, y);
         }
       }
-      if (!onEnemy && this._tipOn) SD.UI.hideTip();
-      this._tipOn = onEnemy;
+      if (!onEnemy && this._tipOn && !bandHit) SD.UI.hideTip();
+      this._tipOn = onEnemy || !!bandHit;
       const h = this.reels.hit(x, y);
       const prev = this.reels.hover;
       this.reels.hover = h;
@@ -1349,31 +1503,27 @@ const TREE_SX = 1.12;
       if (this.state === 'decision' && h) {
         const run = this.run;
         let preview = null;
+        const changed = JSON.stringify(prev) !== JSON.stringify(h);
+        let act = null, lbl = 'ずらすと…';
         if (h.kind === 'cell' && h.row !== 0 && !this.mode && run.canNudge(h.reel, h.row)) {
           cursor = 'pointer';
-          const cells = run.paylineCells(); cells[h.reel] = run.cellAt(h.reel, h.row);
-          preview = this.previewEval(cells);
+          act = (c) => c.nudge(h.reel, h.row);
         } else if (h.kind === 'cell' && h.row === 0) {
           if (this.mode || run.canHold(h.reel) || run.canBless(h.reel)) cursor = 'pointer';
           if (this.mode && this.mode.kind === 'echo' && this.mode.src != null && run.canEcho(this.mode.src, h.reel)) {
-            const cells = run.paylineCells(); cells[h.reel] = run.paylineCell(this.mode.src);
-            preview = this.previewEval(cells); preview._label = '写すと…';
+            const src = this.mode.src; act = (c) => c.echo(src, h.reel); lbl = '写すと…';
           }
         } else if (h.kind === 'ribbon') {
-          const act = this.ribbonAction(h.reel, h.index);
-          if (act) {
+          const ra = this.ribbonAction(h.reel, h.index);
+          if (ra) {
             cursor = 'pointer';
-            const cells = run.paylineCells(); cells[h.reel] = run.reels[h.reel].strip[act.kind === 'key' ? h.index : ((run.reels[h.reel].pos + act.dir) % run.reels[h.reel].strip.length + run.reels[h.reel].strip.length) % run.reels[h.reel].strip.length];
-            preview = this.previewEval(cells);
+            act = ra.kind === 'key' ? (c) => c.fateKey(h.reel, h.index) : (c) => c.nudge(h.reel, ra.dir);
+            if (ra.kind === 'key') lbl = '鍵で…';
           }
         }
-        const changed = JSON.stringify(prev) !== JSON.stringify(h);
-        if (changed) {
-          this.hoverPreview = preview;
-          this.renderLeft(preview || run.forecast(), preview ? (preview._label || 'ずらすと…') : null);
-        }
-      } else if (this.hoverPreview && this.state === 'decision') {
-        this.hoverPreview = null; this.renderLeft(this.run.forecast());
+        if (changed) this.hoverManip(act, lbl);
+      } else if ((this.hoverPreview || (this.hoverPrev && !this.btnHover)) && this.state === 'decision') {
+        this.hoverPreview = null; this.hoverPrev = null; this.renderLeft(this.run.forecast());
       }
       SD.Game.canvas.style.cursor = cursor;
     }
@@ -1432,9 +1582,7 @@ const TREE_SX = 1.12;
         cell.appendChild(U.el('span', 'sp-off', off === 0 ? '今' : off > 0 ? '下' + off : '上' + -off));
         if (ok) {
           cell.addEventListener('mouseenter', () => {
-            const cells = run.paylineCells(); cells[reel] = c;
-            const R = this.previewEval(cells); R._label = kind === 'key' ? '鍵で…' : 'ずらすと…';
-            this.hoverPreview = R; this.renderLeft(R, R._label);
+            this.hoverManip(kind === 'key' ? (cc) => cc.fateKey(reel, idx) : (cc) => cc.nudge(reel, off), kind === 'key' ? '鍵で…' : 'ずらすと…');
           });
           cell.addEventListener('click', () => {
             this.closePicker();
@@ -1452,13 +1600,14 @@ const TREE_SX = 1.12;
       el.style.left = Math.max(10, Math.min(1270 - el.offsetWidth, R.x + R.w / 2 - el.offsetWidth / 2)) + 'px';
       this.picker = el;
     }
-    closePicker() { if (this.picker) { this.picker.remove(); this.picker = null; this.hoverPreview = null; } }
+    closePicker() { if (this.picker) { this.picker.remove(); this.picker = null; this.hoverPreview = null; this.hoverPrev = null; } }
 
     // ------------------------------------------------------------------ loop
     update(dt) {
       this.scene.update(dt);
       this.reels.update(dt);
       this.joy = Math.max(0, (this.joy || 0) - dt * 1.3);
+      this.bandSlide = Math.max(0, (this.bandSlide || 0) - dt * 4.5);
       const V = this.V;
       this.fc = this.run.phase === 'spun' ? this.run.forecast() : null;
       V.pred = this.predictedLoss();
@@ -1500,7 +1649,10 @@ const TREE_SX = 1.12;
         const bv = (this.profile.stats.bestVs || {})[e.id];
         if (bv != null) ghostPct = bv;
       }
-      this.scene.drawHud(ctx, { V: this.V, showPartyBar: true, showEnemyBar: !!this.scene.enemy && !!this.V.enemy, intent: this.intent, ghostPct });
+      const hp = this.hoverPrev && this.hoverPrev.band ? this.hoverPrev : null;
+      this.scene.drawHud(ctx, { V: this.V, showPartyBar: true, showEnemyBar: !!this.scene.enemy && !!this.V.enemy, ghostPct,
+        intent: hp && hp.intentI ? Object.assign({}, hp.intentI, { born: null }) : this.intent,
+        band: hp ? hp.band : this.band, bandCaption: hp ? hp.caption : null, bandSlide: this.bandSlide, run: this.run, script: !!this.run.mods.script });
       // device band background
       SD.StageDraw.drawApron(ctx, this.scene.time);
       this.reels.draw(ctx, st);

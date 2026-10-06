@@ -25,7 +25,7 @@
     'armor_clank', 'burn', 'enemy_die', 'combo_pair', 'combo_triple', 'combo_bond', 'jackpot', 'seal_break', 'reaper',
     'hex', 'drain', 'jam', 'mark', 'reflect', 'enemy_heal', 'windup', 'doom_tick',
     'ui_hover', 'ui_click', 'ui_confirm', 'ui_deny', 'unlock', 'ember', 'spark_gain', 'spark_use', 'door', 'step',
-    'reward', 'relic', 'second_wind', 'death', 'boss_appear', 'boss_phase', 'victory', 'near_miss',
+    'reward', 'relic', 'second_wind', 'death', 'boss_appear', 'boss_phase', 'victory', 'near_miss', 'clack',
   ];
   const TRACKS = ['title', 'camp', 'cellar', 'ossuary', 'gearworks', 'boss', 'victory', 'none'];
 
@@ -732,6 +732,16 @@
     tone(o, t + 0.24, 262 * p, 0.35, 0.025, { a: 0.04, hold: 0.06, type: 'triangle', f1: 247 * p });
   });
 
+  // 拍子木 (hyoshigi): two dry wooden claps — the scene changes, the Ashwheel's script moves on
+  def('clack', { wet: 0.22, pri: 1, jit: 0.02 }, (o, t, p) => {
+    for (const [dt, k] of [[0, 1], [0.105, 1.07]]) {
+      noise(o, t + dt, 0.022, 0.42, { type: 'bandpass', f: 2350 * p * k, q: 7 });
+      noise(o, t + dt, 0.035, 0.18, { type: 'bandpass', f: 1150 * p * k, q: 4, buf: 'pink' });
+      tone(o, t + dt, 930 * p * k, 0.045, 0.09, { a: 0.001, type: 'triangle', f1: 860 * p * k });
+      tone(o, t + dt, 1870 * p * k, 0.025, 0.035, { a: 0.001 });
+    }
+  });
+
   // Mix table: per-SFX gain, balanced from offline metering (short-term loudness). Tiers, at full volume:
   // big moments ≈ -12 dB · combat ≈ -18 dB · device/feedback ≈ -22 dB · UI ≈ -28 dB · ticks/hover/ember ≈ -35 dB peak.
   const MIX = {
@@ -742,7 +752,7 @@
     hex: 1.7, drain: 1.6, jam: 1, mark: 1.9, reflect: 2.2, enemy_heal: 2, windup: 0.6, doom_tick: 1,
     ui_hover: 1.5, ui_click: 1.6, ui_confirm: 1.6, ui_deny: 1.6, unlock: 2.5, ember: 2, spark_gain: 1.5, spark_use: 3,
     door: 0.8, step: 1.6, reward: 2, relic: 2, second_wind: 1, death: 1.3, boss_appear: 0.85, boss_phase: 1, victory: 1,
-    near_miss: 2.5,
+    near_miss: 2.5, clack: 2.2,
   };
   Object.keys(MIX).forEach((k) => { if (SFX[k]) SFX[k].v = MIX[k]; });
 

@@ -121,7 +121,7 @@
         profile(MID, 4, 0);
         SD.Game.setScreen(new SD.Screens.RunScreen({ startFloor: 4 }));
         await until(() => run().state === 'idle', 12000);
-        const e = run().run.enemy; e.turn = 2; run().run._newIntent(); run().setIntent(e.intent);
+        const e = run().run.enemy; e.turn = 2; e.cursor = 2; run().run._newIntent(); run().setIntent(e.intent);
         await wait(400);
         break;
       }

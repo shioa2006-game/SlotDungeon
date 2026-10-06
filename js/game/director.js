@@ -191,7 +191,7 @@
       this.sfx('respin');
       if (ev.cost === 'spark') { rs.spendCandle(); this.sfx('spark_use'); }
       if (ev.cost === 'hp') { this.V().hp = ev.hp; SD.FX.text(290, 320, '-4', { color: '#ff6a6a', size: 26, sub: '血の代価' }); }
-      this.V().sparks = ev.sparks;
+      this.V().sparks = ev.sparks; this.V().borrowed = ev.borrowed || 0;
       const wf = this.heroFx('witch');
       for (let i = 0; i < 3; i++) if (ev.spun[i]) { const p = SD.REEL_LAYOUT.reels[i]; SD.FX.stream(wf.x, wf.y, p.x + p.w / 2, p.y + 40, 4, { color: '#c58bff', stagger: 0.02 }); }
       await this.wait(0.12);
@@ -208,8 +208,8 @@
       const rs = this.rs;
       this.heroAt('priest').play('manip', 0.45);
       this.sfx('nudge');
-      if (ev.cost === 'spark') { rs.spendCandle(); this.sfx('spark_use', { vol: 0.7 }); }
-      this.V().sparks = ev.sparks;
+      if (ev.cost === 'spark' || ev.cost === 'borrowed') { rs.spendCandle(); this.sfx('spark_use', { vol: 0.7 }); }
+      this.V().sparks = ev.sparks; this.V().borrowed = ev.borrowed || 0;
       const pf = this.heroFx('priest'), p = SD.REEL_LAYOUT.reels[ev.reel];
       SD.FX.stream(pf.x, pf.y, p.x + p.w / 2, ev.dir < 0 ? p.y + 30 : p.y + p.h - 30, 4, { color: '#7df0b4', stagger: 0.02 });
       await rs.reels.nudge(ev.reel, ev.dir, Math.abs(ev.dir) > 1 ? 0.3 : 0.2);
@@ -228,7 +228,7 @@
     async on_echo(ev) {
       this.heroAt('witch').play('cast', 0.5);
       this.sfx('reflect');
-      this.V().sparks = ev.sparks; this.rs.spendCandle(); this.rs.spendCandle();
+      this.V().sparks = ev.sparks; this.V().borrowed = ev.borrowed || 0; this.rs.spendCandle(); this.rs.spendCandle();
       const a = this.rs.reels.cellCenter(ev.from, 0), b = this.rs.reels.cellCenter(ev.reel, 0);
       SD.FX.stream(a.x, a.y, b.x, b.y, 10, { color: '#c58bff', stagger: 0.015 });
       await this.wait(0.45);
@@ -238,11 +238,69 @@
     async on_fateKey(ev) {
       this.heroAt('knight').play('cheer', 0.5);
       this.sfx('unlock');
-      this.V().sparks = ev.sparks; this.rs.spendCandle(); this.rs.spendCandle();
+      this.V().sparks = ev.sparks; this.V().borrowed = ev.borrowed || 0; this.rs.spendCandle(); this.rs.spendCandle();
       const rs = this.rs;
       await rs.reels.spin(rs.run.reels.map((r) => r.pos), rs.run.reels.map((_, i) => i === ev.reel), { respin: true });
       const c = rs.reels.cellCenter(ev.reel, 0);
       SD.FX.ring(c.x, c.y, { color: '#ffd257', r1: 90 });
+    }
+
+    // 拍子木: the clappers strike, the Ashwheel's script slides one cell toward the party
+    async on_scriptAdvance(ev) {
+      const rs = this.rs, V = this.V();
+      this.heroAt('knight').play('manip', 0.45);
+      this.sfx('clack');
+      if (ev.cost === 'spark' || ev.cost === 'borrowed') this.sfx('spark_use', { vol: 0.6 });
+      V.sparks = ev.sparks; V.borrowed = ev.borrowed || 0;
+      const e = rs.scene.enemy;
+      const p = this.enemyFx();
+      // the skipped cell burns away
+      const it0 = ev.from || {};
+      SD.FX.text(p.x - 40, p.y - 150, (it0.label || (it0.k === 'guard' ? '防御' : it0.k === 'heal' ? '回復' : '予告')) + '…', { color: '#a99ab8', size: 18, vy: -40, life: 0.8 });
+      SD.FX.burst(p.x - 20, p.y - 130, 12, { color: ['#c58bff', '#e8bf6a', '#7a6a8a'], kind: 'ember', speed: 120, gravity: -40 });
+      rs.bandSlide = 1;
+      Object.assign(V.enemy, rs.enemyView(ev.enemy, true));
+      rs.setIntent(ev.intent);
+      if (e) {
+        const it = ev.intent;
+        e.setHold(it.k === 'charge' || it.k === 'doom' || (it.heavy && it.k === 'attack') ? 'windup' : it.now && (it.now.k === 'curl' || it.now.k === 'reflect') ? 'stance' : null);
+        e.play('hit', 0.25);
+      }
+      SD.FX.text(640, 452, '台本を送った', { color: '#e8bf6a', size: 20, vy: -10, life: 1.0 });
+      await this.wait(0.35);
+    }
+
+    // 借り火: an ash-red ember is lent from the Ashwheel for this turn
+    async on_borrow(ev) {
+      const rs = this.rs, V = this.V();
+      this.sfx('drain', { pitch: 0.75 });
+      setTimeout(() => this.sfx('spark_gain', { pitch: 0.8 }), 160);
+      const e = rs.scene.enemy; if (e) e.play('cast', 0.5);
+      const p = this.enemyFx(), c = rs.reels.borrowPos ? rs.reels.borrowPos() : { x: 700, y: 430 };
+      SD.FX.stream(p.x, p.y, c.x, c.y - 20, 10, { color: '#ff7a6a', stagger: 0.02 });
+      await this.wait(0.3);
+      V.borrowed = ev.borrowed || 1; V.sparks = ev.sparks;
+      SD.FX.text(c.x, c.y - 50, '灰輪に借りた', { color: '#ff9a8a', size: 20, vy: -24, sub: '次の行動も、このターンに' });
+      await this.wait(0.2);
+    }
+
+    // a debt from the last fight: this enemy will collect it on its first turn
+    async on_debtCarried() {
+      const p = this.enemyFx();
+      SD.FX.text(p.x, p.y - 160, '灰輪への借りが残っている', { color: '#ff9a8a', size: 22, vy: -14, sub: 'この敵は最初のターンに2手行う', life: 1.8 });
+      await this.wait(0.4);
+    }
+
+    // the debt is collected: the Ashwheel plays its next cell right away
+    async on_debtAction(ev) {
+      const rs = this.rs;
+      rs.bandSlide = 1;
+      rs.setIntent(ev.intent, { debt: true });
+      const p = this.enemyFx();
+      SD.FX.text(p.x, p.y - 150, '借りの一手', { color: '#ff9a8a', size: 28, vy: -16 });
+      this.sfx('clack', { pitch: 0.8 });
+      if (rs.scene.enemy) rs.scene.enemy.setHold('windup');
+      await this.wait(0.45);
     }
 
     async on_chain() {
@@ -255,6 +313,7 @@
     async on_payline(ev) {
       const rs = this.rs;
       rs.leaveDecision();
+      this.V().borrowed = 0; // an unused borrowed spark goes out with the turn
       this.sfx('resolve');
       rs.comboCells = null;
       if (ev.combos.length) {
@@ -578,7 +637,12 @@
       await this.wait(0.3);
     }
     async on_stunned() { const p = this.enemyFx(); SD.FX.text(p.x, p.y - 90, '動けない！', { color: '#ffe68a', size: 30 }); await this.wait(0.4); }
-    async on_staggerCancel() { const p = this.enemyFx(); SD.FX.text(p.x, p.y - 90, '強撃は不発', { color: '#9fe8ff', size: 28 }); await this.wait(0.35); }
+    async on_staggerCancel() {
+      const p = this.enemyFx();
+      SD.FX.text(p.x, p.y - 90, '強撃は不発', { color: '#9fe8ff', size: 28, sub: SD.UI.bandVisible(this.rs.run) ? '台本から消えた' : null });
+      if (SD.UI.bandVisible(this.rs.run)) this.rs.bandSlide = 1;
+      await this.wait(0.35);
+    }
     async on_enemyIdle() { await this.wait(0.15); }
     async on_intent(ev) { this.rs.setIntent(ev.intent); this.V().enemy = Object.assign(this.V().enemy, this.rs.enemyView(ev.enemy, true)); }
 
@@ -595,7 +659,7 @@
 
     async on_newTurn(ev) {
       const rs = this.rs, V = this.V();
-      V.block = ev.block; V.sparks = ev.sparks;
+      V.block = ev.block; V.sparks = ev.sparks; V.borrowed = 0;
       Object.assign(V.enemy, rs.enemyView(ev.enemy, true));
       rs.setIntent(ev.intent);
       if (rs.scene.enemy) {

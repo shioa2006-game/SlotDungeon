@@ -129,9 +129,61 @@
     };
   };
 
-  UI.intentInfo = (run, it, e) => {
+  // ---------------------------------------------------------------- 灰輪の台本 (the enemy's script band)
+  // Shown from the second layer on (B5+), or as soon as a 灯紋 that works on the script is lit.
+  UI.bandVisible = (run) => !!(run && run.enemy && (run.floor >= 5 || run.mods.script || run.mods.borrow));
+  UI.BAND_ROLE = { now: '今', skip: '不発', debt: '借りの一手', next: '次', next2: 'その次' };
+  UI.BAND_COND = {
+    seal: '封印が全て割れると、灰輪の台本は書き換わる',
+    hp: '灰輪の主のHPが30%を切ると、台本は書き換わる（破滅の秒読み）',
+    chain: '連鎖でもう一度回る目しだいで変わる',
+    stagger: '盾2つで怯ませれば、この強撃は台本から消える（その分、後ろが繰り上がる）',
+    shift: '盾2つで手前の強撃を不発にすると、ここは1コマ繰り上がる',
+  };
+  // icon / value / corner badges for one script cell { role, it, dmg, unknown, cond, locked }
+  UI.cellInfo = (run, c) => {
+    const it = (c && c.it) || {};
+    const I = { icon: 'attack', value: c ? c.dmg : null, sym: null, now: null, danger: false, label: it.label || '' };
+    if ((c && c.unknown) || it.k === 'unknown') { I.icon = 'unknown'; I.value = null; I.label = '？'; return I; }
+    switch (it.k) {
+      case 'attack':
+        I.icon = it.heavy ? 'heavy' : it.doomTick ? 'doom' : 'attack'; I.danger = !!it.heavy;
+        I.label = it.doomTick ? `破滅まで ${it.doomN}` : it.label || (it.heavy ? '強撃' : '攻撃');
+        break;
+      case 'doom': I.icon = 'doom'; I.danger = true; I.label = it.label || '灰燼'; break;
+      case 'charge': I.icon = 'charge'; I.value = null; I.label = it.label || '溜め'; break;
+      case 'guard': I.icon = 'guard'; I.label = '防御'; break;
+      case 'hex': I.icon = 'hex'; I.label = it.label || '呪い'; break;
+      case 'drain': I.icon = 'drain'; I.value = null; I.label = it.label || '吸火'; break;
+      case 'jam': I.icon = 'jam'; I.label = it.label || '固着'; break;
+      case 'heal': I.icon = 'heal'; I.label = it.label || '回復'; break;
+      case 'none': I.icon = 'curl'; I.value = null; I.label = it.label || '構え'; break;
+      default: I.icon = 'unknown'; I.value = null; break;
+    }
+    const n = it.now;
+    if (n) {
+      if (n.k === 'mark') I.sym = n.sym;
+      else I.now = n.k === 'reflect' ? 'reflect' : n.k === 'curl' ? 'armor' : n.k === 'thirst' ? 'thirst' : null;
+    }
+    return I;
+  };
+  UI.cellExplain = (run, c) => {
+    const lines = [`<b>灰輪の台本 — ${UI.BAND_ROLE[c.role] || ''}</b>`];
+    if (c.unknown || (c.it && c.it.k === 'unknown')) lines.push('サイコロしだい。この目はまだ決まっていない');
+    else lines.push(UI.intentExplain(run, c.it, c.dmg));
+    if (c.role === 'skip') lines.push('<b>盾2つで怯ませる</b>：この強撃は台本から消え、行われない');
+    if (c.role === 'debt') lines.push('<b>借りの代償</b>：灰輪はこの一手も、このターンのうちに行う');
+    if (c.cond) lines.push(`<span style="color:#e2c8ff">？ ${UI.BAND_COND[c.cond] || '変わる可能性がある'}</span>`);
+    if (c.locked && run.mods.script) lines.push('<span style="color:#e8bf6a">溜め終えた一撃は台本から外せない（早めることはできる）</span>');
+    if (c.role === 'next' && !c.cond && !c.unknown) lines.push('<span style="color:#b9ad95">このまま発動すれば、次のターンはこれになる</span>');
+    return lines.join('<br>');
+  };
+
+  // opts.band: the script band is on screen, so the plaque does not repeat what comes next
+  UI.intentInfo = (run, it, e, opts) => {
     if (!it) return null;
     const dmg = run.intentDamage(it);
+    const band = !!(opts && opts.band);
     const I = { icon: 'attack', value: null, label: it.label || '攻撃', danger: false, sym: null, hint: null, now: null, width: 0 };
     switch (it.k) {
       case 'attack':
@@ -140,7 +192,7 @@
         if (it.doomTick) { I.icon = 'doom'; I.label = `破滅まで ${it.doomN}`; I.danger = true; }
         break;
       case 'doom': I.icon = 'doom'; I.value = dmg; I.label = it.label || '灰燼'; I.danger = true; break;
-      case 'charge': I.icon = 'charge'; I.value = dmg || null; I.label = `${it.label || '溜め'} → 次は${it.nextLabel || '強撃'}`; I.danger = true; I.hint = '盾2つで怯ませて止める'; break;
+      case 'charge': I.icon = 'charge'; I.value = dmg || null; I.label = band ? (it.label || '溜め') : `${it.label || '溜め'} → 次は${it.nextLabel || '強撃'}`; I.danger = true; I.hint = '盾2つで怯ませて止める'; break;
       case 'guard': I.icon = 'guard'; I.value = it.v; I.label = '防御'; break;
       case 'hex': I.icon = 'hex'; I.value = it.v; I.label = it.label || '呪い'; break;
       case 'drain': I.icon = 'drain'; I.value = run.sparks > 0 ? null : it.v; I.label = run.sparks > 0 ? '火種を吸う' : '吸火（攻撃）'; break;
@@ -149,6 +201,8 @@
       case 'none': I.icon = 'curl'; I.label = it.label || '構え'; break;
       default: I.icon = 'unknown'; break;
     }
+    if (it.k === 'unknown') { I.icon = 'unknown'; I.label = '？'; }
+    I.locked = run.isLockedCell ? run.isLockedCell(it) : false;
     if (it.now) {
       const n = it.now;
       if (n.k === 'curl') I.now = { icon: 'armor', label: '鎧+' + n.v, value: null, glow: 'rgba(160,190,255,0.6)' };
@@ -181,9 +235,9 @@
     }
   };
 
-  UI.intentExplain = (run, it) => {
+  UI.intentExplain = (run, it, dmgOverride) => {
     if (!it) return '';
-    const dmg = run.intentDamage(it), S = (s) => UI.symName(s);
+    const dmg = dmgOverride != null ? dmgOverride : run.intentDamage(it), S = (s) => UI.symName(s);
     const lines = [];
     switch (it.k) {
       case 'attack':

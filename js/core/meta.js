@@ -21,7 +21,8 @@
         lastRun: null,         // summary of last run (for death-screen comparisons)
       },
       seen: {},                // tutorial / first-time flags
-      settings: { master: 0.8, music: 0.55, sfx: 0.85, speed: 1 },
+      // comboPause: 'smart' = once 継ぎ留め/拍子木 are lit, a trine/bond waits for you while something can still be done; 'off' = always fires
+      settings: { master: 0.8, music: 0.55, sfx: 0.85, speed: 1, comboPause: 'smart' },
     };
   }
 
@@ -140,7 +141,7 @@
       maxHp: D().BASE_HP,
       reels: 3,
       // manipulation
-      sparks: u('nudge') || u('respin'),
+      sparks: u('nudge') || u('respin') || u('hyoshigi'),
       startSparks: 0, maxSparks: 0, sparkPerWin: 0,
       nudge: u('nudge'),
       nudgeRange: u('longpush') ? 2 : 1,
@@ -150,6 +151,9 @@
       stasis: u('stasis'),
       echo: u('echo'),
       fateKey: u('fatekey'),
+      script: u('hyoshigi'),            // 拍子木: send the Ashwheel's script one cell
+      borrow: u('borrow'),              // 借り火: borrow a one-turn spark, paid with the script
+      comboPause: (u('stasis') || u('hyoshigi')) && !(profile.settings && profile.settings.comboPause === 'off'),
       precision: u('precision'),
       wildStart: u('wild') ? [1] : [],
       wildUnlocked: u('wild'),
@@ -189,6 +193,7 @@
       abbotBonus: (st.eliteKills.abbot || 0) > 0,
     };
     if (m.sparks) { m.startSparks = 2; m.maxSparks = 3; m.sparkPerWin = 1; }
+    if (!m.sparks) m.borrow = false;
     if (u('sparkjar')) { m.startSparks += 1; m.maxSparks += 1; }
     if (u('cloak')) m.maxHp += 10;
     if (u('toughness')) m.maxHp += 15;

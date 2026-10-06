@@ -145,11 +145,12 @@
         const e = this.enemy, info = e.info();
         if (V.enemy.boss) drawEnemyBar(ctx, V.enemy, 640, 104, this.time, st.ghostPct);
         else drawEnemyBar(ctx, V.enemy, e.x, 392, this.time, st.ghostPct);
+        this.bandRects = [];
         if (st.intent) {
-          if (V.enemy.boss) drawIntent(ctx, st.intent, e.x - 250, 214, this.time, st);
-          else drawIntent(ctx, st.intent, e.x + (info.head ? info.head[0] : 0), e.y + (info.head ? info.head[1] : -info.height) - 18, this.time, st);
+          if (V.enemy.boss) this.bandRects = drawIntent(ctx, st.intent, e.x - 250, 214, this.time, st) || [];
+          else this.bandRects = drawIntent(ctx, st.intent, e.x + (info.head ? info.head[0] : 0), e.y + (info.head ? info.head[1] : -info.height) - 18, this.time, st) || [];
         }
-      }
+      } else this.bandRects = [];
       void Art; void G;
     }
 
@@ -248,7 +249,101 @@
     }
   }
 
-  // intent bubble: a small hanging lantern-like plaque
+  // a tiny brass padlock (the same motif as the reel clamp): "this cell is fixed in the script"
+  function drawPadlock(ctx, x, y, s) {
+    ctx.save(); ctx.translate(x, y);
+    ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.arc(0, -s * 0.15, s * 0.42, Math.PI, 0); ctx.lineWidth = s * 0.34; ctx.strokeStyle = '#1a1222'; ctx.stroke();
+    ctx.lineWidth = s * 0.16; ctx.strokeStyle = '#e8bf6a'; ctx.stroke();
+    SD.Art.roundRectPath(ctx, -s * 0.6, -s * 0.15, s * 1.2, s * 0.95, s * 0.2);
+    ctx.fillStyle = '#c9953b'; ctx.fill(); ctx.lineWidth = s * 0.18; ctx.strokeStyle = '#1a1222'; ctx.stroke();
+    ctx.fillStyle = '#1a1222'; ctx.fillRect(-s * 0.08, s * 0.12, s * 0.16, s * 0.36);
+    ctx.restore();
+  }
+
+  // 灰輪の台本: the rest of the enemy's script as a little brass-and-stone ribbon hanging to the right of the plaque,
+  // flowing toward the party (nearest cell first). Returns hit rects for tooltips.
+  function drawBand(ctx, band, x0, cy, t, st) {
+    const Art = SD.Art, rects = [];
+    const cells = band.cells.slice(1);
+    if (!cells.length) return rects;
+    const size = (c) => (c.role === 'next2' ? 36 : c.role === 'skip' || c.role === 'debt' ? 38 : 42);
+    const gap = 13;
+    const total = cells.reduce((s, c) => s + size(c) + gap, 0);
+    const slide = Math.max(0, Math.min(1, st.bandSlide || 0)) * 55;
+    ctx.save();
+    // the rail (a brass rod like the reel ribbons' bracket)
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#1a1222'; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(x0 - 14, cy); ctx.lineTo(x0 + total - gap + 4, cy); ctx.stroke();
+    ctx.strokeStyle = '#7a5520'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.strokeStyle = 'rgba(232,191,106,0.55)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x0 - 14, cy - 1); ctx.lineTo(x0 + total - gap + 4, cy - 1); ctx.stroke();
+    // caption
+    ctx.font = `700 11px ${SD.Game.fontUI}`; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.lineJoin = 'round';
+    const cap = st.bandCaption || 'この先';
+    ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText(cap, x0, cy - 27);
+    ctx.fillStyle = st.bandCaption ? '#e2c8ff' : 'rgba(216,204,176,0.9)'; ctx.fillText(cap, x0, cy - 27);
+    let x = x0 + slide;
+    cells.forEach((c, i) => {
+      const s = size(c), cx = x + s / 2, y = cy - s / 2;
+      const I = SD.UI.cellInfo(st.run, c);
+      // chevron: the script flows toward the party
+      ctx.save();
+      ctx.fillStyle = 'rgba(232,191,106,0.75)';
+      const chx = x - gap / 2;
+      ctx.beginPath(); ctx.moveTo(chx + 3, cy - 4); ctx.lineTo(chx - 2, cy); ctx.lineTo(chx + 3, cy + 4); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      ctx.save();
+      if (c.role === 'skip') { Art.roundRectPath(ctx, x, y, s, s, 9); ctx.fillStyle = '#140f1c'; ctx.fill(); ctx.globalAlpha *= 0.5; }
+      if (c.role === 'next2') ctx.globalAlpha *= 0.82;
+      if (c.role === 'debt') Art.glow(ctx, cx, cy, s * 1.3, 'rgba(255,90,70,0.6)', 0.55 + 0.3 * Math.sin(t * 5));
+      Art.roundRectPath(ctx, x, y, s, s, 9);
+      ctx.fillStyle = c.role === 'debt' ? 'rgba(48,14,22,0.96)' : 'rgba(24,17,34,0.94)'; ctx.fill();
+      ctx.lineWidth = 2;
+      const stag = c.cond === 'stagger'; // not unknown: the player can strike it with two wards
+      ctx.strokeStyle = c.role === 'debt' ? '#ff6a5a' : stag ? '#6fd3ff' : I.danger ? '#c8584a' : '#8a6a2e';
+      if (c.cond) ctx.setLineDash(stag ? [6, 3] : [4, 3]);
+      ctx.stroke(); ctx.setLineDash([]);
+      if (Art.drawIcon) Art.drawIcon(ctx, I.icon, cx, cy - (I.value != null ? 5 : 0), s * 0.58, { t });
+      if (I.value != null) numText(ctx, String(I.value), cx, cy + s * 0.29, s >= 40 ? 14 : 12, I.danger || c.role === 'debt' ? '#ff9a8a' : '#fff6e8');
+      // what it does to your board this turn (封じ / 鏡 / 鎧 / 渇き)
+      if (I.sym && Art.drawSymbol) {
+        ctx.save(); ctx.beginPath(); ctx.arc(x + s - 3, y + 3, 9.5, 0, Math.PI * 2); ctx.fillStyle = 'rgba(30,18,44,0.96)'; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = '#c58bff'; ctx.stroke(); ctx.restore();
+        Art.drawSymbol(ctx, I.sym, x + s - 3, y + 3, 15, {});
+      } else if (I.now && Art.drawIcon) {
+        ctx.save(); ctx.beginPath(); ctx.arc(x + s - 3, y + 3, 9.5, 0, Math.PI * 2); ctx.fillStyle = 'rgba(30,18,44,0.96)'; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = '#c58bff'; ctx.stroke(); ctx.restore();
+        Art.drawIcon(ctx, I.now, x + s - 3, y + 3, 15, { t });
+      }
+      if (c.locked && st.script) drawPadlock(ctx, x + 3, y + 4, 9);
+      if (c.cond) {
+        ctx.save(); ctx.beginPath(); ctx.arc(x + s - 3, y + s - 3, 7.5, 0, Math.PI * 2); ctx.fillStyle = stag ? '#12324a' : '#3a1f52'; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = stag ? '#6fd3ff' : '#c58bff'; ctx.stroke();
+        ctx.font = `900 ${stag ? 9 : 11}px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = stag ? '#bff0ff' : '#f0e0ff';
+        ctx.fillText(stag ? '盾' : '?', x + s - 3, y + s - 2.5);
+        ctx.restore();
+      }
+      ctx.restore();
+      if (c.role === 'skip') {
+        ctx.save(); ctx.strokeStyle = '#ff6a5a'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x + 5, y + s - 5); ctx.lineTo(x + s - 5, y + 5); ctx.stroke(); ctx.restore();
+      }
+      if (c.role === 'skip' || c.role === 'debt') {
+        ctx.save(); ctx.font = `900 11px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
+        const tag = c.role === 'skip' ? '不発' : '借り';
+        ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText(tag, cx, y + s + 13);
+        ctx.fillStyle = c.role === 'skip' ? '#9fe8ff' : '#ff9a8a'; ctx.fillText(tag, cx, y + s + 13); ctx.restore();
+      }
+      rects.push({ x, y, w: s, h: s, cell: c });
+      x += s + gap;
+    });
+    ctx.restore();
+    return rects;
+  }
+
+  // intent bubble: a small hanging lantern-like plaque (+ the script band when it is on stage)
   function drawIntent(ctx, I, cx, by, t, st) {
     const Art = SD.Art;
     const w = Math.max(96, I.width || 0), h = 50;
@@ -256,14 +351,19 @@
     const bob = Math.sin(t * 2.4) * 2;
     const age = I.born != null ? t - I.born : 9;
     const pop = (age < 0.3 ? 1 + 0.35 * (1 - SD.Art.easeOutBack(age / 0.3)) : 1) * (I.lethal ? 1.15 : 1);
+    const band = st && st.band && st.band.cells && st.band.cells.length > 1 ? st.band : null;
+    let rects = [];
+    if (band) rects = drawBand(ctx, band, x + w + 22, y + h / 2 + bob, t, st);
     ctx.save(); ctx.translate(0, bob);
     if (pop !== 1) { ctx.translate(cx, y + h / 2); ctx.scale(pop, pop); ctx.translate(-cx, -(y + h / 2)); }
     // string
     ctx.strokeStyle = 'rgba(232,191,106,0.6)'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(cx, y + h); ctx.lineTo(cx, y + h + 10); ctx.stroke();
-    if (I.danger) Art.glow(ctx, cx, y + h / 2, 90, 'rgba(255,80,60,0.55)', 0.5 + 0.3 * Math.sin(t * 6));
-    Art.roundRectPath(ctx, x, y, w, h, 12); ctx.fillStyle = 'rgba(24,17,34,0.94)'; ctx.fill();
-    ctx.lineWidth = 2.5; ctx.strokeStyle = I.danger ? '#ff6a5a' : '#c9953b'; ctx.stroke();
+    if (I.danger || I.debt) Art.glow(ctx, cx, y + h / 2, 90, 'rgba(255,80,60,0.55)', 0.5 + 0.3 * Math.sin(t * 6));
+    if (st && st.bandCaption) Art.glow(ctx, cx, y + h / 2, 80, 'rgba(197,139,255,0.6)', 0.45 + 0.25 * Math.sin(t * 7));
+    Art.roundRectPath(ctx, x, y, w, h, 12); ctx.fillStyle = I.debt ? 'rgba(48,14,22,0.96)' : 'rgba(24,17,34,0.94)'; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = st && st.bandCaption ? '#c58bff' : I.debt ? '#ff6a5a' : I.danger ? '#ff6a5a' : '#c9953b'; ctx.stroke();
+    if (I.locked && st && st.script) drawPadlock(ctx, x + 11, y + 11, 11);
     const iconX = x + 26;
     if (Art.drawIcon) Art.drawIcon(ctx, I.icon, iconX, y + h / 2, 34, { t });
     if (I.sym && Art.drawSymbol) Art.drawSymbol(ctx, I.sym, iconX + 34, y + h / 2, 30, {});
@@ -285,9 +385,17 @@
       ctx.fillStyle = '#bff0ff'; ctx.fillText(I.hint, cx, y - 33);
     }
     ctx.restore();
-    // active stance badge (on the enemy, now)
+    if (I.debt) {
+      ctx.save(); ctx.font = `900 12px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
+      const lbl = '借りの一手';
+      const lw = ctx.measureText(lbl).width + 14;
+      Art.roundRectPath(ctx, cx - lw / 2, y + h + 4 + bob, lw, 18, 8); ctx.fillStyle = '#8a1f2c'; ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#1a1222'; ctx.stroke();
+      ctx.fillStyle = '#ffe0e0'; ctx.fillText(lbl, cx, y + h + 17 + bob); ctx.restore();
+    }
+    // active stance badge (on the enemy, now) — moves to the left of the plaque when the script band hangs on the right
     if (I.now) {
-      const nx = cx + w / 2 + 34, ny = y + h / 2 + bob;
+      const nx = band ? cx - w / 2 - 38 : cx + w / 2 + 34, ny = y + h / 2 + bob;
       Art.glow(ctx, nx, ny, 44, I.now.glow || 'rgba(197,139,255,0.6)', 0.6 + 0.3 * Math.sin(t * 5));
       Art.roundRectPath(ctx, nx - 30, ny - 24, 60, 48, 10); ctx.fillStyle = 'rgba(30,18,44,0.95)'; ctx.fill();
       ctx.lineWidth = 2; ctx.strokeStyle = '#c58bff'; ctx.stroke();
@@ -297,6 +405,7 @@
       ctx.save(); ctx.font = `700 12px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = '#1a1222'; ctx.lineJoin = 'round';
       ctx.strokeText(I.now.label, nx, ny - 31); ctx.fillStyle = '#e2c8ff'; ctx.fillText(I.now.label, nx, ny - 31); ctx.restore();
     }
+    return rects;
   }
 
   // ---------------------------------------------------------------- proscenium & curtain

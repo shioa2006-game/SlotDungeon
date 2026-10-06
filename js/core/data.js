@@ -63,7 +63,11 @@
   // ai(e, run) -> intent { k, v, heavy, grow, doomTick, now:{k,v,sym}, label }
   //   k: 'attack' | 'charge' | 'guard' | 'hex' | 'drain' | 'jam' | 'heal' | 'doom' | 'none'
   //   now (active during the CURRENT player turn): 'curl' (armor+v) | 'thirst' | 'mark' (sym) | 'reflect'
-  const cyc = (e, list) => list[e.turn % list.length];
+  // 灰輪の台本 (the script): e.cursor is the position in the enemy's script, e.turn the real enemy turns elapsed.
+  // Advancing the script (拍子木) moves the cursor without a turn passing, so time-based effects read e.turn.
+  // ai() is also called on read-only copies to preview the script: it may only read e.* and run.rng / run.mostStocked(),
+  // and anything drawn from run.rng is shown as unknown ("？") in the preview.
+  const cyc = (e, list) => list[e.cursor % list.length];
   const ENEMIES = {
     rat: {
       name: '燭ネズミ', hp: 16, armor: 0, ember: 5, zone: 'cellar',
@@ -71,7 +75,7 @@
       ai(e, run) {
         if (e.lastK === 'charge') return { k: 'attack', v: 10, heavy: true, label: '噛みつき' };
         const r = run.rng.next();
-        if (e.turn > 0 && r < 0.3) return { k: 'charge', label: '身構え', next: 10 };
+        if (e.cursor > 0 && r < 0.3) return { k: 'charge', label: '身構え', next: 10 };
         return { k: 'attack', v: r < 0.65 ? 5 : 6 };
       },
     },
@@ -127,7 +131,7 @@
       name: '骨の修道院長', hp: 160, armor: 0, ember: 40, zone: 'ossuary', elite: true,
       tip: '封じは最も多く彫った記号を狙う。ずらして外せ。',
       ai(e, run) {
-        const step = e.turn % 6;
+        const step = e.cursor % 6;
         if (step === 0 || step === 4) return { k: 'attack', v: 6, now: { k: 'mark', sym: run.mostStocked() }, label: '封じ' };
         if (step === 1) return { k: 'attack', v: 12, label: '断罪' };
         if (step === 2) return { k: 'hex', v: 2, label: '呪詛' };
@@ -170,7 +174,7 @@
       tip: '封印は三連か絆でしか割れない。封印が残るほど灰輪は加速する。燃焼と反射は封印越しでも半分通る。',
       ai(e, run) {
         if (e.seals > 0) {
-          // the sealed wheel spins faster every turn: stalling behind the seals is not safe
+          // the sealed wheel spins faster every real turn (sending the script does not speed it up)
           const rage = e.turn;
           const it = cyc(e, [
             { k: 'attack', v: 9, label: '灰の一撃' },
@@ -264,6 +268,12 @@
     { id: 'echo', branch: 'weave', name: '写し身', glyph: '写', cost: 120, req: ['stasis', 'longpush'], a: -112, r: 4, kind: 'verb',
       desc: '【写し身】1ターン1回、火種1で、発動列のある記号を別のリールの発動列に写す。',
       next: 'ペアから確定の三連が作れる。' },
+    { id: 'borrow', branch: 'weave', name: '借り火', glyph: '借', cost: 55, req: ['nudge'], a: -145, r: 2, kind: 'verb',
+      desc: '【灰輪に借りる】火種が0のとき、1戦1回、このターンだけ使える火種を1つ借りる。代わりに灰輪は台本を1コマ先取りし、次の行動もこのターンのうちに行う。',
+      next: '火種が尽きても、敵の未来を担保に一手だけ動ける。' },
+    { id: 'hyoshigi', branch: 'weave', name: '拍子木', glyph: '拍', cost: 100, req: ['stasis', 'bulwark'], a: -90, r: 4, kind: 'verb',
+      desc: '【台本送り】1ターン1回、火種1で、灰輪の台本を1コマ送る。今の予告は行われず、次の行動が今になる。溜め終えた強撃と灰燼は送れない（早めることはできる）。',
+      next: '敵に何をさせるかを、自分で選べる。' },
     { id: 'fatekey', branch: 'weave', name: '運命の鍵', glyph: '鍵', cost: 170, req: ['echo'], a: -96, r: 5, kind: 'verb',
       desc: '【運命の鍵】1ターン1回、火種1で、1本のリールを好きなコマに合わせる（リールのリボンから選ぶ）。',
       next: '運命を、自分で選ぶ。' },

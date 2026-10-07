@@ -318,6 +318,13 @@
         Art.drawIcon(ctx, I.now, x + s - 3, y + 3, 15, { t });
       }
       if (c.locked && st.script) drawPadlock(ctx, x + 3, y + 4, 9);
+      if (c.actChange) {
+        // this resolve rewrites the boss's script: an exact cell of the next act, not reachable by 台本送り
+        ctx.save(); ctx.font = `900 10px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        SD.Art.roundRectPath(ctx, x - 4, y - 7, 18, 14, 4); ctx.fillStyle = '#5a2a78'; ctx.fill();
+        ctx.lineWidth = 1.2; ctx.strokeStyle = '#e2c8ff'; ctx.stroke();
+        ctx.fillStyle = '#ffffff'; ctx.fillText('幕', x + 5, y + 0.5); ctx.restore();
+      }
       if (c.cond) {
         ctx.save(); ctx.beginPath(); ctx.arc(x + s - 3, y + s - 3, 7.5, 0, Math.PI * 2); ctx.fillStyle = stag ? '#12324a' : '#3a1f52'; ctx.fill();
         ctx.lineWidth = 1.5; ctx.strokeStyle = stag ? '#6fd3ff' : '#c58bff'; ctx.stroke();

@@ -5,7 +5,9 @@
  *   - the band's "next" cell is exactly the intent the enemy shows next turn (unless marked unknown / conditional)
  *   - the predicted damage of a turn equals the damage actually taken (unless a 連鎖 spin rolled dice)
  *   - a borrowed spark never survives the turn, is taken at most once per fight, and its debt is paid exactly once
- *   - a locked cell (強撃 / 灰燼) is never sent away, and the script is sent at most once per turn */
+ *   - a locked cell (強撃 / 灰燼) is never sent away, and the script is sent at most once per turn
+ *   - borrow state never crosses a fight; a turn in which the script was sent never auto-resolves
+ *   - a 0-spark turn never auto-resolves while a borrowed spark could have saved the party (AE audit 2026-10-08) */
 'use strict';
 const path = require('path');
 globalThis.SD = {};
@@ -41,7 +43,8 @@ function check(run, where) {
     const f = run.fight;
     if (!(f.borrowed === 0 || f.borrowed === 1)) fail('borrowed spark count ' + f.borrowed + ' @' + where, run);
     if (run.phase === 'idle' && f.borrowed) fail('a borrowed spark survived the turn @' + where, run);
-    if (run.phase === 'idle' && f.debt && !f.debtCarried) fail('an unpaid debt survived the enemy turn @' + where, run);
+    if (run.phase === 'idle' && f.debt) fail('an unpaid debt survived the enemy turn @' + where, run);
+    if (run.phase === 'spun' && f.advanced && run.shouldAutoResolve()) fail('a turn with a script send auto-resolved @' + where, run);
   }
   if (!isFinite(run.embers) || run.embers < 0) fail('embers bad @' + where, run);
 }
@@ -97,6 +100,18 @@ for (let n = 0; n < N; n++) {
         ev = run.spin(); actions.spin = (actions.spin || 0) + 1;
       } else if (run.phase === 'spun') {
         if (R.chance(0.25)) purity(run);
+        // E: an auto-resolving 0-spark turn must not hide a borrowed action that would keep the party alive
+        if (R.chance(0.3) && run.sparks === 0 && run.canBorrow() && run.shouldAutoResolve()) {
+          const dies = run.previewTurn();
+          if (dies && dies.partyDies && !dies.random && run.mods.nudge) {
+            for (let i = 0; i < 3; i++) for (const d of [-1, 1]) {
+              if (run.reels[i].jam) continue;
+              const alive = run._sim((c) => { c.fight.borrowed = 1; if (c.reels[i].held) c.toggleHold(i); if (!c.nudge(i, d).length || c.phase !== 'spun') return false; const T = c.previewTurn(); return T && !T.partyDies && !T.secondWind; });
+              if (alive) fail('0-spark turn auto-resolved although a borrowed nudge avoided death', run);
+            }
+          }
+          count('zero-auto');
+        }
         // forecast consistency: the preview must predict the payline that resolve() uses
         const before = run.forecast();
         const k = R.int(13);
@@ -161,7 +176,8 @@ for (let n = 0; n < N; n++) {
           const ended = ev.some((x) => x.t === 'enemyDie' || x.t === 'partyDeath');
           if (hadDebt && !ended && debts !== 1) fail('a debt was not paid exactly once (' + debts + ')', run);
           if (!hadDebt && debts) fail('a debt was paid without borrowing', run);
-          if (ev.some((x) => x.t === 'debtCarried')) count('debt-carried');
+          // a new fight never starts with borrow state from the last one
+          if (ev.some((x) => x.t === 'combat') && run.fight && (run.fight.debt || run.fight.borrowed || run.fight.borrowUsed)) fail('borrow state leaked into the next fight', run);
           if (fightBefore && fightBefore.borrowed) fail('borrowed spark survived resolve', run);
           // damage prediction (the HP bar's striped forecast)
           if (P && !P.random) {

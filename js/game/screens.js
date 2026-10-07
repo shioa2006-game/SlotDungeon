@@ -810,7 +810,7 @@ const TREE_SX = 1.12;
         const eff = Math.min(R.heal, run.maxHp - run.hp);
         row('heart', G.heart.n, R.thirst ? '0' : '+' + eff, R.thirst ? '渇き' : eff < R.heal ? (eff ? `（${R.heal - eff}は溢れる）` : 'HP満タン') : R.cleanse ? '浄化' : '', 'heal');
       }
-      if (G.lantern && R.marked !== 'lantern') row('lantern', G.lantern.n, '+' + R.embers, R.sparks ? `火種+${R.sparks}` : '', 'em');
+      if (G.lantern && R.marked !== 'lantern') row('lantern', G.lantern.n, '+' + (R.embers > 0 ? Math.max(1, Math.round(R.embers * (run.mods.emberMult || 1))) : 0), R.sparks ? `火種+${R.sparks}` : '', 'em');
       if (G.skull && R.marked !== 'skull') row('skull', G.skull.n, R.reaper ? R.reaper : R.skullDmg ? R.skullDmg : '-' + (G.skull.n * 3), R.reaper ? '死神' : R.skullDmg ? '敵へ' : '自分へ', 'self');
       if (R.marked && R.markedN) row(R.marked, R.markedN, '-' + R.markedN * 2, '封じ', 'self');
       el.appendChild(rows);
@@ -829,6 +829,17 @@ const TREE_SX = 1.12;
         const it = e.intent;
         // a trine that waits: say why, once the player can plan around it
         const why = this.state === 'decision' && !label ? run.comboPauseReason() : null;
+        if (this.state === 'decision' && !label && run.canAdvance()) {
+          // the exact cell a send makes "now" (it can differ from the band's 次 when this resolve changes the boss's act)
+          const PA = run.previewAdvance();
+          if (PA) {
+            const AI = SD.UI.cellInfo(run, { it: PA.intent, dmg: PA.unknown ? null : run.cellDamage(PA.intent) });
+            const mk = PA.intent.now && PA.intent.now.k === 'mark' ? SD.Data.SYMBOLS[PA.intent.now.sym].name + '封じ・' : '';
+            el.appendChild(U.el('div', 'fc-in', `台本送り → ${PA.unknown ? '？（サイコロ次第）' : mk + AI.label + (AI.value != null ? ' ' + AI.value : '')} <kbd>S</kbd>`));
+          }
+        } else if (this.state === 'decision' && !label && run.fight && run.fight.advanced && !why && !run.needsDecision()) {
+          el.appendChild(U.el('div', 'fc-pause', '台本を送ったターンは、発動で確定 <kbd>Space</kbd>'));
+        }
         if (why) {
           const txt = { overheal: '回復が溢れる三連。別の目にするか、このまま発動', idleWard: '受ける攻撃のない盾の三連。蓄えか、別の目か', script: '台本を送ってから発動することもできる', plan: '留め・継ぎ留めを決めてから発動できる' }[why];
           el.appendChild(U.el('div', 'fc-pause', txt + ' <kbd>Space</kbd>'));
@@ -928,7 +939,7 @@ const TREE_SX = 1.12;
       if (showAdv) {
         const blk = run.phase === 'spun' ? run.advanceBlock() : 'none';
         d.advance.disabled = !(st === 'decision' && blk === null);
-        d.advance.innerHTML = `台本送り <small>${blk === 'locked' ? '強撃は送れない' : blk === 'used' ? '済' : run.borrowedSparks() ? '借り火' : '火種1'}</small> <kbd>S</kbd>`;
+        d.advance.innerHTML = `台本送り <small>${blk === 'locked' ? (run.enemy && run.enemy.intent && run.enemy.intent.k === 'doom' ? '灰燼は送れない' : '強撃は送れない') : blk === 'used' ? '済' : run.borrowedSparks() ? '借り火' : '火種1'}</small> <kbd>S</kbd>`;
         d.advance.title = blk === 'locked' ? '溜め終えた一撃（強撃・灰燼）は台本から外せない' : blk === 'used' ? '台本送りは1ターン1回' : blk === 'spark' ? '火種が足りない' : '今の予告を飛ばし、次の行動を今にする（火種1）';
       }
       if (showBor) {

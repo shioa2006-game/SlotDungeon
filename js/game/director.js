@@ -284,13 +284,6 @@
       await this.wait(0.2);
     }
 
-    // a debt from the last fight: this enemy will collect it on its first turn
-    async on_debtCarried() {
-      const p = this.enemyFx();
-      SD.FX.text(p.x, p.y - 160, '灰輪への借りが残っている', { color: '#ff9a8a', size: 22, vy: -14, sub: 'この敵は最初のターンに2手行う', life: 1.8 });
-      await this.wait(0.4);
-    }
-
     // the debt is collected: the Ashwheel plays its next cell right away
     async on_debtAction(ev) {
       const rs = this.rs;

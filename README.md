@@ -31,3 +31,4 @@
 - `docs/GDD.md` 企画書、`docs/ARCH.md` モジュール契約
 - `tools/sim.js` バランスシミュレーション（`node tools/sim.js campaign balanced 10`、`metrics balanced 20`、`script 150` など）、`tools/fuzz.js` エンジンの不変条件テスト、`tools/test_script.js` 灰輪の台本・借り火のユニット／回帰（初期版との並走比較）／ボス試験
 - `docs/PHASE2_ALITE_IMPLEMENTATION.md` Phase 2（灰輪の台本＋残り火の一手）の実装記録
+- `playtests/` Dots のプレイテスト記録（ローカル専用。`.gitignore` で除外し、GitHub には上げない。ルールは `CLAUDE.md`）

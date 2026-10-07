@@ -1,7 +1,7 @@
 # A+E 曖昧挙動 監査（2026-10-08）
 
 対象：Phase 2「灰輪の台本（A-lite・拍子木）」＋「残り火の一手（E・借り火）」。
-入力：`docs/SlotDungeon_AE_Playtest/`（experience-report-ja.md、detailed-run-log.md、evidence/）。
+入力：`playtests/SlotDungeon_AE_Playtest/`（experience-report-ja.md、detailed-run-log.md、evidence/。ローカル専用で GitHub には無い）。
 方針：抽出 → コード確認 → 再現 → 分類（A 不具合／B UI説明不足／C 誤解／D 仕様矛盾／E 再現不可・原因未確定）→ A/B/D だけを最小限に修正。バランス変更と新機能は行っていない。
 
 ---

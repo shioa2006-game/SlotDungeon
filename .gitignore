@@ -1,1 +1,4 @@
 .claude/settings.local.json
+
+# Dots のプレイテスト記録（ローカル専用・GitHub には上げない）。ルールは CLAUDE.md を参照
+/playtests/

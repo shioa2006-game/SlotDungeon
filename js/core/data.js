@@ -38,6 +38,8 @@
     ossuary:   { id: 'ossuary',   name: '水没した納骨堂', music: 'ossuary',   floors: [5, 8] },
     gearworks: { id: 'gearworks', name: '歯車の深淵',     music: 'gearworks', floors: [9, 11] },
     abyss:     { id: 'abyss',     name: '灰輪の座',       music: 'boss',      floors: [12, 12] },
+    // 第四層 (after the boss, once the game has been cleared): enemies keep their listed numbers (no depth scaling)
+    ashdeep:   { id: 'ashdeep',   name: '灰の底',         music: 'gearworks', floors: [13, 16], deep: true },
   };
   const FLOORS = {
     1:  { zone: 'cellar', type: 'normal', pool: ['rat', 'slime'] },
@@ -52,8 +54,15 @@
     10: { zone: 'gearworks', type: 'normal', pool: ['golem', 'shade', 'sentry_deep'] },
     11: { zone: 'gearworks', type: 'normal', pool: ['golem', 'shade', 'sentry_deep'] },
     12: { zone: 'abyss', type: 'boss', enemy: 'ashlord' },
+    // 灰の底: B13 / B14 meet 重ね殻 and 返し鏡 once each (order rolled when the descent starts), B15 is a normal crossroads
+    13: { zone: 'ashdeep', type: 'battle', deepSlot: 0 },
+    14: { zone: 'ashdeep', type: 'battle', deepSlot: 1 },
+    15: { zone: 'ashdeep', type: 'normal', pool: ['husk', 'mirror'] },
+    16: { zone: 'ashdeep', type: 'elite', enemy: 'abbot_deep' },
   };
   const LAST_FLOOR = 12;
+  const DEEP_FIRST_FLOOR = 13, DEEP_LAST_FLOOR = 16;
+  const DEEP_PAIR = ['husk', 'mirror'];
   // Shortcut starts (free milestones): what you receive instead of the skipped floors.
   const SHORTCUTS = {
     5: { gate: 'bellhound', carvings: 3, relics: 1, embers: 25, label: '第二層から' },
@@ -194,6 +203,46 @@
       },
     },
   };
+
+  // ---------------------------------------------------------------- 第四層「灰の底」 (docs/EXPANSION_3A_SPEC.md)
+  Object.assign(ENEMIES, {
+    // attacks and raises its shell (block) in the same turn; arrives behind a thick shell. Burn / thorns / reaper go through it.
+    husk: {
+      name: '重ね殻', hp: 250, armor: 0, ember: 20, zone: 'ashdeep', startBlock: 200,
+      tip: '分厚い殻（防御）をまとって現れ、攻めながら殻を重ねる。燃焼・棘・死神は殻を素通りする。',
+      ai(e) {
+        return cyc(e, [
+          { k: 'attack', v: 15, guard: 10 },
+          { k: 'charge', label: '構え', next: 32, nextLabel: '強撃', guard: 10 },
+          { k: 'attack', v: 32, heavy: true, label: '強撃' },
+          { k: 'attack', v: 10, guard: 40, label: '殻を重ねる' },
+        ]);
+      },
+    },
+    // seals the symbol that led the player's last resolve (at first: the most carved one). The seal is the enemy's state,
+    // not a script cell: sending the script never lifts it. e.mirrorSym is set by the engine (Run._mirrorAfter).
+    mirror: {
+      name: '返し鏡', hp: 280, armor: 0, ember: 22, zone: 'ashdeep', mirror: true,
+      tip: '前のターンに主役だった記号を封じる（最初はいちばん多く彫った記号）。台本を送っても封じは外れない。',
+      ai(e, run) {
+        const it = cyc(e, [{ k: 'attack', v: 14 }, { k: 'attack', v: 16 }, { k: 'hex', v: 1, label: '呪い' }]);
+        return Object.assign({}, it, { now: { k: 'mark', sym: e.mirrorSym || run.mostStocked() } });
+      },
+    },
+    // stage 3a stand-in elite: the abbot's script with deeper numbers (replaced in stage 3b)
+    abbot_deep: {
+      name: '深淵の修道院長', art: 'abbot', variant: 'deep', hp: 380, armor: 0, ember: 60, zone: 'ashdeep', elite: true,
+      tip: '封じは最も多く彫った記号を狙う。ずらして外せ。',
+      ai(e, run) {
+        const step = e.cursor % 6;
+        if (step === 0 || step === 4) return { k: 'attack', v: 9, now: { k: 'mark', sym: run.mostStocked() }, label: '封じ' };
+        if (step === 1) return { k: 'attack', v: 18, label: '断罪' };
+        if (step === 2) return { k: 'hex', v: 2, label: '呪詛' };
+        if (step === 3) return { k: 'heal', v: 18, guard: 9, label: '蘇生' };
+        return { k: 'attack', v: 21, label: '断罪' };
+      },
+    },
+  });
 
   // ---------------------------------------------------------------- relics (run only)
   const RELICS = {
@@ -344,6 +393,6 @@
 
   SD.Data = {
     SYMBOLS, WILD_PRIORITY, BOND_ORDER, MATCH_MULT, START_STRIPS, STRIP_MIN, STRIP_MAX, BASE_HP,
-    HEROES, ZONES, FLOORS, LAST_FLOOR, SHORTCUTS, ENEMIES, RELICS, EVENTS, SKILLS, SKILL_BY_ID,
+    HEROES, ZONES, FLOORS, LAST_FLOOR, DEEP_FIRST_FLOOR, DEEP_LAST_FLOOR, DEEP_PAIR, SHORTCUTS, ENEMIES, RELICS, EVENTS, SKILLS, SKILL_BY_ID,
   };
 })();

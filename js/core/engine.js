@@ -130,6 +130,7 @@
       const next = this.floor === 0 ? this.startFloor : this.floor + 1;
       const f = D().FLOORS[next];
       if (!f) return [];
+      if (f.deepSlot != null) return [{ kind: 'battle', floor: next, enemy: this.deep ? this.deep.order[f.deepSlot] : D().DEEP_PAIR[f.deepSlot] }];
       if (f.type !== 'normal') return [{ kind: f.type, floor: next, enemy: f.enemy }];
       if (!this.mods.doors || this.floor === 0) return [{ kind: 'battle', floor: next, enemy: this._rollEnemy(next) }];
       const n = this.mods.crossroads ? 3 : 2;
@@ -480,17 +481,19 @@
       const zone = Data.FLOORS[this.floor] ? Data.FLOORS[this.floor].zone : 'abyss';
       const zStart = Data.ZONES[zone].floors[0];
       const k = Math.max(0, this.floor - zStart);
-      const scale = def.elite || def.boss || !def.zone ? 1 : 1 + 0.12 * k;
+      const flat = !!Data.ZONES[zone].deep; // 灰の底: enemies keep their listed numbers
+      const scale = def.elite || def.boss || !def.zone || flat ? 1 : 1 + 0.12 * k;
       const dread = !!opts.dread;
       const hp = Math.round(def.hp * scale * (dread ? (enemyId === 'golem' ? 1.2 : 1.5) : 1));
       const e = {
         id: enemyId, art: def.art || enemyId, variant: def.variant || null, name: (dread ? '怨念の' : '') + def.name,
-        hp, maxHp: hp, armor: def.armor, block: 0, atkBonus: (!def.elite && !def.boss && k >= 2) ? 1 : 0,
+        hp, maxHp: hp, armor: def.armor, block: def.startBlock || 0, atkBonus: (!def.elite && !def.boss && !flat && k >= 2) ? 1 : 0,
         atkMult: dread ? 1.5 : 1, burn: 0, turn: 0, cursor: 0, seals: def.seals || 0, maxSeals: def.seals || 0, phase: 1,
         stunned: false, staggered: false, doom: null, markIdx: null, dread, elite: !!def.elite, boss: !!def.boss,
         ember: def.ember * (dread ? 2 : 1), intent: null, now: null, lastK: null, tip: def.tip,
       };
       this.enemy = e;
+      if (def.mirror) e.mirrorSym = this.mostStocked(); // 返し鏡: the first seal is the most carved symbol
       this._lastEnemy = enemyId;
       this.fight = {
         turn: 0, respinsThisTurn: 0, paidRespins: 0, freeNudgeLeft: this.mods.freeNudge, blessLeft: this.mods.bless ? 1 : 0,
@@ -1257,6 +1260,7 @@
         const r = hit(Math.round(e.burn * 2 * (e.seals > 0 ? 0.5 : 1)), 'burn');
         ev.push({ t: 'pyre', dmg: r.dmg, hp: e.hp, stacks: e.burn });
       }
+      if (D().ENEMIES[e.id].mirror && e.hp > 0) this._mirrorAfter(R);
       f.rampart = f.rampart || R.rampart;
       f.wardReflect = f.wardReflect || R.wardReflect;
       f.guardian = f.guardian || R.guardian;
@@ -1268,6 +1272,18 @@
       }
       if (e.hp <= 0) { ev.push(...this._enemyDefeated()); return 'end'; }
       return 'ok';
+    }
+
+    // 返し鏡: the symbol that acted most in this resolve (sealed and skull cells do not count; a wild counts as what it was
+    // assigned; ties go blade > flame > ward > heart > lantern). Nothing acted: the seal stays as it is.
+    _mirrorAfter(R) {
+      let best = null, bn = 0;
+      for (const s of D().WILD_PRIORITY) {
+        const g = R.groups[s];
+        if (!g || s === R.marked) continue;
+        if (g.n > bn) { bn = g.n; best = s; }
+      }
+      if (best) this.enemy.mirrorSym = best;
     }
 
     _checkBossPhase(ev) {
@@ -1398,12 +1414,13 @@
       switch (it.k) {
         case 'attack': {
           ev.push(this._attackParty(atk(it.v), it.heavy));
+          if (it.guard) { e.block += it.guard; ev.push({ t: 'enemyGuard', block: e.block }); }
           if (it.grow) { e.atkBonus += it.grow; ev.push({ t: 'enemyGrow', atkBonus: e.atkBonus }); }
           if (it.doomTick) ev.push({ t: 'doom', n: (e.doom || 3) - 1 });
           break;
         }
         case 'doom': ev.push(this._attackParty(atk(it.v), true)); ev.push({ t: 'doom', n: 0, fired: true }); break;
-        case 'charge': ev.push({ t: 'enemyCharge', label: it.label }); break;
+        case 'charge': ev.push({ t: 'enemyCharge', label: it.label }); if (it.guard) { e.block += it.guard; ev.push({ t: 'enemyGuard', block: e.block }); } break;
         case 'guard': e.block += it.v; ev.push({ t: 'enemyGuard', block: e.block }); break;
         case 'heal': {
           const b = e.hp; e.hp = Math.min(e.maxHp, e.hp + it.v);
@@ -1526,7 +1543,7 @@
     // A read-only copy of what ai() reads, for walking the script forward.
     _ghostOf(e) {
       return { id: e.id, boss: !!e.boss, hp: e.hp, maxHp: e.maxHp, turn: e.turn, cursor: e.cursor || 0, lastK: e.lastK, doom: e.doom,
-        markIdx: e.markIdx, phase: e.phase, seals: e.seals, atkBonus: e.atkBonus, atkMult: e.atkMult };
+        markIdx: e.markIdx, phase: e.phase, seals: e.seals, atkBonus: e.atkBonus, atkMult: e.atkMult, mirrorSym: e.mirrorSym };
     }
     // Read the next cell on a copy. Dice are never rolled: a cell that needs them comes back unknown.
     _ghostNext(g) {
@@ -1578,6 +1595,8 @@
         this._ghostPlay(g, nx); g.turn += 1;
         const n2 = P.dice ? Object.assign({}, UNKNOWN_CELL) : this._ghostNext(g);
         add('next2', n2, g, cond2);
+        // 返し鏡: the next cell's seal comes from this very line (exact); the one after depends on the next resolve
+        if (D().ENEMIES[e.id].mirror) for (const c of cells) if (c.role === 'next2' && !c.cond && !c.unknown) c.cond = 'mirror';
         // this resolve changes the boss's act: the cells after it belong to the new script (exact, but 台本送り cannot reach them)
         if (e.boss) for (const c of cells) {
           if ((c.role === 'next' || c.role === 'next2') && P.phaseAfter != null && P.phaseAfter !== P.phaseBefore) c.actChange = P.phaseAfter;
@@ -1594,6 +1613,8 @@
       add('next', n1, g, c1);
       this._ghostPlay(g, n1); g.turn += 1;
       add('next2', this._ghostNext(g), g, c2 || (n1.k === 'charge' ? 'stagger' : null));
+      // 返し鏡: before the spin, the seals of the coming cells are decided by resolves still to come
+      if (D().ENEMIES[e.id].mirror) for (const c of cells) if (c.role !== 'now' && !c.cond && !c.unknown) c.cond = 'mirror';
       return { cells, spun: false };
     }
 
@@ -1613,7 +1634,8 @@
       if (sc && !this._shortcutPaid) { this._shortcutPaid = true; this._gainEmbers(sc.embers, 'shortcut'); ev.push({ t: 'embers', amount: sc.embers, total: this.embers, src: 'shortcut' }); }
       if (e.elite || e.boss) this.eliteKills.push(e.id);
       this.lastFightTurns = this.fight.turn + 1;
-      if (e.boss) { this.bossHpPct = 0; return ev.concat(this._win()); }
+      if (e.boss) { this.bossHpPct = 0; return ev.concat(this.mods.deepUnlocked && !this.deep ? this._settleBoss() : this._win()); }
+      if (this.deep && this.floor >= D().DEEP_LAST_FLOOR) return ev.concat(this._finishDeep(true));
       for (const r of this.reels) {
         const keep = r.strip[r.pos];
         r.strip = r.strip.filter((c) => !c.temp);
@@ -1646,12 +1668,14 @@
         if (e.boss) { this.bossHpPct = pct; this._gainEmbers(Math.floor((1 - pct) * 60), 'fight'); }
         else if (e.elite) this._gainEmbers(Math.floor((1 - pct) * e.ember * 0.6), 'fight');
       }
+      if (this.deep) return ev.concat(this._finishDeep(false)); // fallen in 灰の底: the run stays won
       this._finish(false);
       ev.push({ t: 'runEnd', summary: this.summary });
       return ev;
     }
 
     _win() {
+      if (this.deep) return this._finishDeep(true);
       this.phase = 'won';
       this._finish(true);
       return [{ t: 'runWon' }, { t: 'runEnd', summary: this.summary }];
@@ -1659,11 +1683,62 @@
 
     _finish(won) {
       this._gainEmbers(this.floor * 2, 'depth');
-      this.summary = {
+      this.summary = this._summaryNow(won);
+    }
+    _summaryNow(won) {
+      return {
         won, floor: this.floor, startFloor: this.startFloor, zone: this.zoneOf(this.floor), embers: this.embers,
         emberLog: Object.assign({}, this.emberLog), stats: Object.assign({}, this.stats), sparksLeft: this.sparks,
         eliteKills: this.eliteKills.slice(), bossHpPct: this.bossHpPct, killer: this.killer, relics: this.relics.slice(), seed: this.seed,
       };
+    }
+
+    // ================================================================== 灰の底 (docs/EXPANSION_3A_SPEC.md §2)
+    // 灰輪の主 beaten by a profile that has won before: the run is won and settled here. The UI writes this summary to the
+    // profile at once (Meta.applyRunResult) and asks 帰還 / さらに降りる; nothing after this can take the win away.
+    _settleBoss() {
+      this._finish(true);
+      this.summary.settled = true;
+      this.settled = { embers: this.embers, depth: this.floor * 2, stats: Object.assign({}, this.stats), elites: this.eliteKills.length, summary: this.summary };
+      this.phase = 'descent';
+      return [{ t: 'runWon' }, { t: 'bossSettled', summary: this.summary }];
+    }
+    // false: 帰還 (the settled result, nothing more is counted). true: さらに降りる — a campfire, then B13.
+    chooseDescent(go) {
+      if (this.phase !== 'descent') return [];
+      if (!go) { this.phase = 'won'; return [{ t: 'runEnd', summary: this.summary }]; }
+      this.deep = { order: this.rng.shuffle(D().DEEP_PAIR.slice()) };
+      for (const r of this.reels) {
+        const keep = r.strip[r.pos];
+        r.strip = r.strip.filter((c) => !c.temp);
+        const np = r.strip.indexOf(keep);
+        r.pos = np >= 0 ? np : 0;
+        r.held = false; r.carried = false; r.jam = false; r.echo = null;
+      }
+      this.block = 0;
+      this.enemy = null;
+      this.fight = null;
+      const ev = [{ t: 'descend', order: this.deep.order.slice() }];
+      const d = this._gainSparks(this.mods.sparkPerWin);
+      if (d > 0) ev.push({ t: 'sparks', delta: d, total: this.sparks, max: this.maxSparks, src: 'win' });
+      return ev.concat(this._startEvent('campfire'));
+    }
+    // The descent ends (B16 cleared, fallen, or given up). summary.won stays true; summary.deep holds only what was gained
+    // after the boss (Meta.applyDeepResult adds just that), summary.base is the settled summary (for a one-shot apply).
+    _finishDeep(cleared) {
+      const s0 = this.settled, st = this.stats, b = s0.stats;
+      this._gainEmbers(Math.max(0, this.floor * 2 - s0.depth), 'depth');
+      this.phase = cleared ? 'won' : 'dead';
+      const sum = this._summaryNow(true);
+      sum.settled = true;
+      sum.base = s0.summary;
+      sum.deep = {
+        floor: this.floor, cleared: !!cleared, embers: this.embers - s0.embers,
+        kills: st.kills - b.kills, triples: (st.triples || 0) - (b.triples || 0), bonds: (st.bonds || 0) - (b.bonds || 0),
+        eliteKills: this.eliteKills.slice(s0.elites),
+      };
+      this.summary = sum;
+      return (cleared ? [{ t: 'deepCleared' }] : []).concat([{ t: 'runEnd', summary: sum }]);
     }
   }
 

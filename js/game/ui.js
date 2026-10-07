@@ -139,6 +139,7 @@
     chain: '連鎖でもう一度回る目しだいで変わる',
     stagger: '盾2つで怯ませれば、この強撃は台本から消える（その分、後ろが繰り上がる）',
     shift: '盾2つで手前の強撃を不発にすると、ここは1コマ繰り上がる',
+    mirror: '返し鏡の封じは、その前の発動で決まる（まだ決まっていない）',
   };
   // icon / value / corner badges for one script cell { role, it, dmg, unknown, cond, locked }
   UI.cellInfo = (run, c) => {
@@ -165,14 +166,17 @@
       if (n.k === 'mark') I.sym = n.sym;
       else I.now = n.k === 'reflect' ? 'reflect' : n.k === 'curl' ? 'armor' : n.k === 'thirst' ? 'thirst' : null;
     }
+    if (c && c.cond === 'mirror') { I.sym = null; I.now = 'mark'; I.markUnknown = true; } // the seal is not decided yet
+    if (it.guard && (it.k === 'attack' || it.k === 'charge')) I.guard = it.guard;
     return I;
   };
   UI.cellExplain = (run, c) => {
     const lines = [`<b>灰輪の台本 — ${UI.BAND_ROLE[c.role] || ''}</b>`];
     if (c.unknown || (c.it && c.it.k === 'unknown')) lines.push('サイコロしだい。この目はまだ決まっていない');
-    else lines.push(UI.intentExplain(run, c.it, c.dmg));
+    else lines.push(UI.intentExplain(run, c.cond === 'mirror' ? Object.assign({}, c.it, { now: null }) : c.it, c.dmg)); // an undecided seal is not described as decided
     if (c.role === 'skip') lines.push('<b>盾2つで怯ませる</b>：この強撃は台本から消え、行われない');
     if (c.role === 'debt') lines.push('<b>借りの代償</b>：灰輪はこの一手も、このターンのうちに行う');
+    if (c.cond === 'mirror') lines.push('<span style="color:#e2c8ff"><b>封じ：？</b>　返し鏡は、その前の発動でいちばん多く働いた記号を封じる。回した後は「次」の封じが確定して表示される</span>');
     if (c.cond) lines.push(`<span style="color:#e2c8ff">？ ${UI.BAND_COND[c.cond] || '変わる可能性がある'}</span>`);
     if (c.locked && run.mods.script) lines.push('<span style="color:#e8bf6a">溜め終えた一撃は台本から外せない（早めることはできる）</span>');
     if (c.actChange) lines.push(`<span style="color:#e2c8ff"><b>幕</b>：この発動で灰輪は第${c.actChange}幕へ移り、台本が書き換わる。これは新しい幕のコマで、台本送りでは届かない（送ると今の幕の次のコマになる）</span>`);
@@ -206,6 +210,7 @@
       default: I.icon = 'unknown'; break;
     }
     if (it.k === 'unknown') { I.icon = 'unknown'; I.label = '？'; }
+    if (it.guard && (it.k === 'attack' || it.k === 'charge')) I.label += ` ＋殻${it.guard}`;
     I.locked = run.isLockedCell ? run.isLockedCell(it) : false;
     if (it.now) {
       const n = it.now;
@@ -265,6 +270,9 @@
       if (n.k === 'mark') lines.push(`<b>このターン</b> ${S(n.sym)} は封じられ、発動列に出ると1つにつき2ダメージ${n.next ? '（次は ' + S(n.next) + '）' : ''}`);
       if (n.k === 'reflect') lines.push('<b>このターン</b> 与えたダメージの半分が返ってくる（ブロックで受けられる）');
     }
+    if (it.guard && (it.k === 'attack' || it.k === 'charge')) lines.push(`同時に<b>殻（防御）${it.guard}</b>を得る。次の自分のターン、剣・焔の直撃を ${it.guard} まで受け止める（燃焼・棘・死神は素通り）`);
+    const ED = run.enemy && SD.Data.ENEMIES[run.enemy.id];
+    if (ED && ED.mirror && it.now && it.now.k === 'mark') lines.push('<span style="color:#e2c8ff">返し鏡：封じるのは、前のターンの発動でいちばん多く働いた記号（最初はいちばん多く彫った記号）。台本を送っても外れない</span>');
     return lines.join('<br>');
   };
 

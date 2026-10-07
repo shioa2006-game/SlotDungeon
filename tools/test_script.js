@@ -414,6 +414,188 @@ function unit() {
     ok(!fresh.fight.debt && !fresh.fight.borrowed && !fresh.fight.borrowUsed && fresh.enemy.cursor === 0, '13b. after load a new fight starts clean');
   }
 
+  section('灰の底 (stage 3a): 重ね殻 — attack and shell in one turn, a thick shell at first');
+  {
+    const ids = ['nudge', 'respin', 'hyoshigi', 'borrow'];
+    const h = fightRun(SD, ids, 'husk', 13, { sparks: 2, hp: 80 });
+    eq([h.enemy.hp, h.enemy.maxHp, h.enemy.block], [250, 250, 200], 'B13: listed HP, a 200 shell at the start');
+    const h15 = fightRun(SD, ids, 'husk', 15, {});
+    eq([h15.enemy.hp, h15.enemy.atkBonus], [250, 0], 'B15: no depth scaling in 灰の底');
+    // the shell takes direct hits; the preview knows it
+    h.spin(); setPayline(h, ['blade', 'blade', 'blade']);
+    const P = h.previewTurn();
+    const raw = h.forecast().directDmg;
+    const ev = h.resolve();
+    eq(h.enemy.hp, P.enemyAfter.hp, 'shell: preview == actual');
+    eq(h.enemy.hp, 250 - Math.max(0, raw - 200), 'shell absorbs the direct hits first');
+    ok(ev.some((x) => x.t === 'enemyGuard') && h.enemy.block === 10, 'its turn: attack 12 and a new shell of 10 (the old one is gone)');
+    eq(h.hp, P.hpAfter, 'party HP: preview == actual');
+    // burn goes through the shell (a burn tick is not a hit)
+    const b = fightRun(SD, ids, 'husk', 13, { sparks: 2, hp: 80 });
+    b.enemy.burn = 10;
+    b.spin(); setPayline(b, ['lantern', 'lantern', 'lantern']);
+    b.resolve();
+    eq(b.enemy.hp, 240, 'burn ticks through a 200 shell');
+    // the wind-up raises a shell too, and a ward pair still strikes the heavy out
+    const c = fightRun(SD, ids, 'husk', 13, { sparks: 2, hp: 80 });
+    c.enemy.cursor = 1; c.enemy.intent = c._readCell(c.enemy); c.enemy.now = null; c.enemy.block = 0;
+    c.spin(); setPayline(c, ['ward', 'ward', 'lantern']);
+    c.resolve();
+    eq([c.enemy.block, c.enemy.intent.label], [10, '殻を重ねる'], 'wind-up: shell 10, and two wards strike the heavy out (next comes 殻を重ねる)');
+    // the band shows the shells to come
+    const d = fightRun(SD, ids, 'husk', 13, { sparks: 2, hp: 80 });
+    eq(d.scriptBand().cells.map((x) => x.it.guard || 0), [10, 10, 0], 'band: each cell carries its shell');
+    // preview == actual on random lines
+    let same = 0, tries = 0;
+    for (let s = 1; s <= 30; s++) {
+      const r = fightRun(SD, ids, 'husk', 13, { sparks: 2, hp: 80, seed: 100 + s });
+      for (let t = 0; t < 4 && r.enemy && r.phase === 'idle'; t++) {
+        r.spin();
+        const Q = r.previewTurn();
+        r.resolve();
+        tries++;
+        const okE = !r.enemy || r.phase === 'dead' || !Q.enemyAfter || r.enemy.hp === Q.enemyAfter.hp; // (enemyAfter is a read-ahead copy: block is checked in the exact cases above)
+        if (okE && (r.hp === Q.hpAfter || (Q.partyDies && r.phase === 'dead'))) same++;
+      }
+    }
+    eq(same, tries, '重ね殻: preview == actual over random turns');
+  }
+
+  section('灰の底: 返し鏡 — the seal and when it is decided');
+  {
+    const ids = ['nudge', 'respin', 'hyoshigi', 'borrow', 'bond'];
+    const m = fightRun(SD, ids, 'mirror', 14, { sparks: 3, hp: 80 });
+    eq([m.enemy.hp, m.enemy.intent.now && m.enemy.intent.now.k, m.enemy.intent.now && m.enemy.intent.now.sym], [280, 'mark', m.mostStocked()], 'turn 1: the most carved symbol is sealed from the start');
+    // idle band: the seals of the coming cells are not decided yet
+    eq(m.scriptBand().cells.map((x) => x.cond), [null, 'mirror', 'mirror'], 'before the spin: next / next2 flagged (decided by the coming resolve)');
+    const first = m.enemy.intent.now.sym, other = first === 'flame' ? 'blade' : 'flame';
+    m.spin(); setPayline(m, [other, other, 'ward']);
+    const B = m.scriptBand(), nx = B.cells.find((x) => x.role === 'next');
+    ok(!nx.cond && nx.it.now.sym === other, 'after the spin: the next seal is shown exactly (what this line would seal)');
+    eq(B.cells.find((x) => x.role === 'next2').cond, 'mirror', 'the cell after: still decided later');
+    m.resolve();
+    eq(m.enemy.intent.now.sym, other, 'decided at 発動: the symbol that acted most is sealed next turn');
+    // sealed cells do not count; nothing acted -> the seal stays
+    const s = fightRun(SD, ids, 'mirror', 14, { sparks: 3, hp: 80 });
+    s.enemy.mirrorSym = 'blade'; s.enemy.intent = s._readCell(s.enemy); s.enemy.now = s.enemy.intent.now;
+    s.spin(); setPayline(s, ['blade', 'blade', 'flame']);
+    s.resolve();
+    eq(s.enemy.intent.now.sym, 'flame', 'the sealed blades do not count: flame is next');
+    const z = fightRun(SD, ids, 'mirror', 14, { sparks: 3, hp: 80 });
+    z.enemy.mirrorSym = 'blade'; z.enemy.intent = z._readCell(z.enemy); z.enemy.now = z.enemy.intent.now;
+    z.spin(); setPayline(z, ['blade', 'skull', 'blade']);
+    z.resolve();
+    eq(z.enemy.intent.now.sym, 'blade', 'nothing acted: the seal stays');
+    // ties: blade > flame > ward > heart > lantern
+    const t = fightRun(SD, ids, 'mirror', 14, { sparks: 3, hp: 80 });
+    t.enemy.mirrorSym = 'heart'; t.enemy.intent = t._readCell(t.enemy); t.enemy.now = t.enemy.intent.now;
+    t.spin(); setPayline(t, ['ward', 'flame', 'lantern']);
+    t.resolve();
+    eq(t.enemy.intent.now.sym, 'flame', 'tie: flame before ward and lantern');
+    // the seal is the enemy's state: 台本送り does not lift it
+    const a = fightRun(SD, ids, 'mirror', 14, { sparks: 3, hp: 80 });
+    const before = a.enemy.intent.now.sym;
+    a.spin(); a.fight.freeRespinUsed = true; a.advance();
+    eq([a.enemy.cursor, a.enemy.intent.now.sym], [1, before], '台本送り moves the script, the seal stays');
+    // a borrowed spark (two cells this enemy turn) does not change how the seal is decided
+    const w = fightRun(SD, ids, 'mirror', 14, { sparks: 0, hp: 80 });
+    w.spin(); w.borrow(); const o2 = w.enemy.intent.now.sym === 'flame' ? 'blade' : 'flame';
+    setPayline(w, [o2, o2, 'heart']);
+    w.resolve();
+    ok(w.enemy.cursor === 2 && w.enemy.intent.now.sym === o2, 'borrow: two cells taken, the seal is still this line\'s');
+    // preview == actual (seal included) over random turns
+    let same = 0, tries = 0;
+    for (let k = 1; k <= 30; k++) {
+      const r = fightRun(SD, ids, 'mirror', 14, { sparks: 2, hp: 80, seed: 300 + k });
+      for (let u = 0; u < 4 && r.enemy && r.phase === 'idle'; u++) {
+        r.spin();
+        const Q = r.previewTurn(), nb = r.scriptBand().cells.find((x) => x.role === 'next');
+        r.resolve();
+        tries++;
+        const okE = !r.enemy || r.phase === 'dead' || !Q.enemyAfter || (r.enemy.hp === Q.enemyAfter.hp && (!nb || nb.cond || JSON.stringify(strip(nb.it)) === JSON.stringify(strip(r.enemy.intent))));
+        if (okE && (r.hp === Q.hpAfter || (Q.partyDies && r.phase === 'dead'))) same++;
+      }
+    }
+    eq(same, tries, '返し鏡: preview and band == actual over random turns');
+  }
+
+  section('灰の底: the descent — offered after a clear, the win settled once, both enemies met');
+  {
+    const ids = ['nudge', 'respin'];
+    const killNow = (r) => {
+      const e = r.enemy; e.hp = 1; e.block = 0; e.seals = 0;
+      r.spin();
+      const mk = e.now && e.now.k === 'mark' ? e.now.sym : null;
+      const sym = mk === 'blade' ? 'flame' : 'blade';
+      setPayline(r, [sym, sym, sym]);
+      return r.resolve();
+    };
+    // never cleared: the boss ends the run as before (also on the very run that clears)
+    const n = fightRun(SD, ids, 'ashlord', 12, {});
+    const evn = killNow(n);
+    ok(n.phase === 'won' && !n.deep && evn.some((x) => x.t === 'runEnd') && !evn.some((x) => x.t === 'bossSettled'), 'not cleared before: the boss ends the run (no choice)');
+    // cleared before: the win is settled, then the choice
+    const winP = (p) => { p.stats.wins = 1; };
+    const r = fightRun(SD, ids, 'ashlord', 12, { profile: winP });
+    const ev = killNow(r);
+    const settled = ev.find((x) => x.t === 'bossSettled');
+    ok(r.phase === 'descent' && settled && settled.summary.won && settled.summary.settled && !ev.some((x) => x.t === 'runEnd'), 'cleared before: the win is settled, 帰還 / さらに降りる is asked');
+    // 帰還: nothing more
+    const home = fightRun(SD, ids, 'ashlord', 12, { profile: winP });
+    const evh = killNow(home);
+    const S1 = evh.find((x) => x.t === 'bossSettled').summary;
+    const pUI = SD.Meta.newProfile(); pUI.stats.wins = 1;
+    SD.Meta.applyRunResult(pUI, S1); // the UI writes the settled win at once
+    const snap = JSON.stringify(pUI);
+    const evb = home.chooseDescent(false);
+    const end = evb.find((x) => x.t === 'runEnd');
+    ok(home.phase === 'won' && end && end.summary === S1 && end.summary.settled, '帰還: the run ends with the settled summary');
+    eq(JSON.stringify(pUI), snap, '帰還: the profile is not touched again');
+    // さらに降りる: campfire, then B13 / B14 meet the two new enemies, B15 crossroads, B16 elite
+    const go = r.chooseDescent(true);
+    ok(go.some((x) => x.t === 'descend') && r.phase === 'event' && r.event.id === 'campfire', 'さらに降りる: a campfire first');
+    eq(r.deep.order.slice().sort(), ['husk', 'mirror'], 'the order is a permutation of the pair');
+    r.chooseEvent('rest');
+    const met = [];
+    for (let fl = 13; fl <= 16 && r.phase !== 'won' && r.phase !== 'dead'; fl++) {
+      let g = 0;
+      while (r.phase === 'crossroads' && g++ < 5) {
+        const bi = r.doors.findIndex((d) => d.kind === 'battle' || d.kind === 'elite' || d.kind === 'continue');
+        r.choose(null, bi >= 0 ? bi : 0);
+      }
+      if (r.phase === 'event') { r.chooseEvent(r.event.options[r.event.options.length - 1].id); fl--; continue; }
+      if (r.phase !== 'idle') break;
+      met.push([r.floor, r.enemy.id]);
+      killNow(r);
+    }
+    eq(met.map((x) => x[0]), [13, 14, 15, 16], 'floors 13–16 in order');
+    eq(met.slice(0, 2).map((x) => x[1]), r.deep.order, 'B13 / B14: the two new enemies, once each');
+    eq(met[3][1], 'abbot_deep', 'B16: the elite');
+    const fin = r.summary;
+    ok(r.phase === 'won' && fin.won && fin.deep && fin.deep.cleared && fin.deep.floor === 16, 'B16 cleared: a won, settled run with the descent result');
+    // the profile: the UI path (settle, then the descent delta) == one-shot apply; embers counted once
+    const p1 = SD.Meta.newProfile(); p1.stats.wins = 1;
+    SD.Meta.applyRunResult(p1, fin.base); SD.Meta.applyDeepResult(p1, fin);
+    const p2 = SD.Meta.newProfile(); p2.stats.wins = 1;
+    SD.Meta.applyFinishedRun(p2, fin);
+    eq(JSON.stringify(p1), JSON.stringify(p2), 'settle + descent == one-shot apply');
+    eq([p1.stats.runs, p1.stats.wins, p1.stats.deaths, p1.stats.bossKills, p1.stats.deepRuns, p1.stats.deepClears, p1.stats.deepBest], [1, 2, 0, 1, 1, 1, 16], 'one run, one win, one boss kill; one descent cleared');
+    eq(p1.embers, r.embers, 'embers: the profile got exactly what the run earned');
+    // fallen in 灰の底: still a win, no death counted
+    const f = fightRun(SD, ids, 'ashlord', 12, { profile: winP });
+    killNow(f); f.chooseDescent(true); f.chooseEvent('rest');
+    f.choose(null, 0);
+    f.hp = 1; f.block = 0; f.mods = Object.assign({}, f.mods, { secondWind: false });
+    f.enemy.intent = { k: 'attack', v: 99 }; f.enemy.now = null;
+    f.spin(); setPayline(f, ['lantern', 'lantern', 'lantern']);
+    const evd = f.resolve();
+    const sd = evd.find((x) => x.t === 'runEnd').summary;
+    ok(f.phase === 'dead' && sd.won && sd.deep && !sd.deep.cleared && sd.deep.floor === 13, 'fallen at B13: the run stays won');
+    const p3 = SD.Meta.newProfile(); p3.stats.wins = 1;
+    SD.Meta.applyFinishedRun(p3, sd);
+    eq([p3.stats.runs, p3.stats.wins, p3.stats.deaths, p3.stats.deepRuns, p3.stats.deepClears, p3.embers], [1, 2, 0, 1, 0, f.embers], 'fallen: no death, no clear; embers once');
+  }
+
   section('save / load: old saves load, new fields default safely');
   {
     const store = {};
@@ -440,6 +622,9 @@ function unit() {
     const res = ctxSD.Meta.applyRunResult(p2, run.summary);
     ok(res && p2.stats.runs === 7, 'applyRunResult with new stats');
     ok(JSON.parse(store[ctxSD.Meta.SAVE_KEY]).version === 1, 'save version unchanged (old saves are not wiped)');
+    eq([p.stats.deepRuns, p.stats.deepBest, p.stats.deepClears, ctxSD.Meta.computeMods(p).deepUnlocked], [0, 0, 0, false], '灰の底 records default to 0; locked until a win');
+    p.stats.wins = 1;
+    ok(ctxSD.Meta.computeMods(p).deepUnlocked, 'a won save unlocks 灰の底');
   }
 }
 

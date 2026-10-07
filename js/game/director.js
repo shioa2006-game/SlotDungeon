@@ -83,7 +83,7 @@
       rs.updateTop();
       if (SD.Audio) SD.Audio.setMusic(Z.music);
       if (ev.newZone || ev.floor === rs.run.startFloor) {
-        const layer = ev.zone === 'cellar' ? '第一層' : ev.zone === 'ossuary' ? '第二層' : ev.zone === 'gearworks' ? '第三層' : '最深部';
+        const layer = ev.zone === 'cellar' ? '第一層' : ev.zone === 'ossuary' ? '第二層' : ev.zone === 'gearworks' ? '第三層' : ev.zone === 'ashdeep' ? '第四層' : '最深部';
         rs.scene.title = { str: Z.name, sub: `${layer} ・ B${ev.floor}`, t: 0 };
       }
     }
@@ -701,6 +701,20 @@
       await this.wait(1.2);
     }
     async on_runEnd(ev) { this.rs.onRunEnd(ev.summary); }
+    // 灰の底
+    async on_bossSettled(ev) { this.rs.onBossSettled(ev.summary); }
+    async on_descend() {
+      SD.FX.flash('rgba(5,3,10,1)', 1.25, 2.2, false);
+      SD.FX.banner('灰の底へ', { sub: '勝利は確定している。重ね殻と返し鏡が待つ', size: 50, life: 2.4 });
+      await this.wait(1.4);
+    }
+    async on_deepCleared() {
+      this.sfx('victory');
+      SD.FX.flash('rgba(255,240,200,1)', 0.6, 0.8);
+      for (const h of this.rs.scene.heroList()) h.play('cheer', 1.2);
+      SD.FX.banner('灰の底を越えた', { sub: '深淵の修道院長を討った', size: 54, life: 3 });
+      await this.wait(2.2);
+    }
   }
 
   SD.Director = Director;

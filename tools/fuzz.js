@@ -15,7 +15,7 @@ for (const f of ['util', 'data', 'meta', 'engine']) require(path.join(__dirname,
 const SD = globalThis.SD;
 const N = +process.argv[2] || 3000;
 const R = SD.Util.makeRng(4242);
-const VALID = new Set(['chisel', 'crossroads', 'event', 'idle', 'spun', 'dead', 'won']);
+const VALID = new Set(['descent', 'chisel', 'crossroads', 'event', 'idle', 'spun', 'dead', 'won']);
 let fails = 0, phases = {}, events = {}, actions = {}, checks = {};
 const count = (k) => { checks[k] = (checks[k] || 0) + 1; };
 
@@ -58,6 +58,7 @@ function randomProfile() {
   if (R.chance(0.5)) p.unlocked.hyoshigi = true;
   if (R.chance(0.5)) p.unlocked.borrow = true;
   if (R.chance(0.2)) p.settings.comboPause = 'off';
+  if (R.chance(0.5)) p.stats.wins = 1; // 灰の底 opens after a clear
   return p;
 }
 
@@ -92,7 +93,16 @@ for (let n = 0; n < N; n++) {
     try {
       // per-fight bookkeeping
       const fk = run.enemy ? run.floor + ':' + run.enemy.id + ':' + run.stats.kills : null;
-      if (fk !== fightKey) { fightKey = fk; borrowsThisFight = 0; }
+      if (fk !== fightKey) {
+        fightKey = fk; borrowsThisFight = 0;
+        // coverage for 灰の底: random play rarely beats the boss, so a cleared profile often meets a weakened one
+        if (run.enemy && run.enemy.boss && run.mods.deepUnlocked && R.chance(0.7)) { run.enemy.hp = Math.min(run.enemy.hp, 30); run.enemy.seals = 0; run.enemy.phase = 2; count('boss-weakened'); }
+        if (run.deep && run.enemy && run.phase === 'idle') {
+          run._deepMet = run._deepMet || {};
+          run._deepMet[run.enemy.id] = true;
+          if (run.floor === 13 || run.floor === 14) { if (run.enemy.id !== run.deep.order[run.floor - 13]) fail('B' + run.floor + ' is not the rolled new enemy', run); }
+        }
+      }
       if (run.phase === 'idle') {
         if (R.chance(0.3)) purity(run);
         const B = run.scriptBand();
@@ -212,6 +222,11 @@ for (let n = 0; n < N; n++) {
           idleBand = null;
           void hpBefore; void block0;
         }
+      } else if (run.phase === 'descent') {
+        const go = R.chance(0.8);
+        ev = run.chooseDescent(go);
+        count(go ? 'descent' : 'return');
+        if (go && R.chance(0.6)) { run.maxHp = Math.max(run.maxHp, 400); run.hp = run.maxHp; count('deep-hp-boost'); }
       } else if (run.phase === 'crossroads') {
         const oi = run.offers && run.offers.length && R.chance(0.85) ? R.int(run.offers.length) : null;
         ev = run.choose(oi, R.int(run.doors.length));
@@ -232,7 +247,19 @@ for (let n = 0; n < N; n++) {
   if (run.summary) {
     const s = run.summary;
     if (!isFinite(s.embers)) fail('summary embers NaN', run);
-    SD.Meta.applyRunResult(profile, s);
+    // 灰の底: a settled boss win is counted once, however the descent ends
+    const before = JSON.parse(JSON.stringify(profile.stats)), e0 = profile.embers;
+    SD.Meta.applyFinishedRun(profile, s);
+    const st = profile.stats;
+    if (st.runs !== before.runs + 1 || st.wins - before.wins > 1 || st.bossKills - before.bossKills > 1) fail('a run was counted more than once', run);
+    if (profile.embers - e0 !== s.embers) fail('embers not counted exactly once: +' + (profile.embers - e0) + ' vs ' + s.embers, run);
+    if (run.deep) {
+      count('deep-run');
+      if (!s.won || !s.deep || !s.settled) fail('a descent ended without the settled win', run);
+      if (st.deaths !== before.deaths) fail('a fall in 灰の底 counted as a death', run);
+      if (s.deep.floor >= 14 && !(run._deepMet && run._deepMet.husk && run._deepMet.mirror)) fail('reached B14 without meeting both new enemies', run);
+      if (s.deep.cleared) count('deep-clear');
+    }
   }
 }
 console.log(`fuzz: ${N} runs, ${fails} failures`);

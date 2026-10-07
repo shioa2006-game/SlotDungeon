@@ -120,6 +120,10 @@
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, 1280, 446); ctx.clip();
       if (Art.drawBackground) Art.drawBackground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth });
+      if (this.zone === 'ashdeep') { // 灰の底: the same ruins, drained to ash
+        ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.75; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
+        ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.18; ctx.fillStyle = '#1a1820'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
+      }
       else { ctx.fillStyle = '#17142a'; ctx.fillRect(0, 0, 1280, 446); }
       if (this.bossDark > 0) { ctx.fillStyle = `rgba(5,3,10,${this.bossDark * 0.5})`; ctx.fillRect(0, 0, 1280, 446); }
       // stage lighting: the backdrop sits a step back, the wheel below is the footlight
@@ -318,6 +322,11 @@
         Art.drawIcon(ctx, I.now, x + s - 3, y + 3, 15, { t });
       }
       if (c.locked && st.script) drawPadlock(ctx, x + 3, y + 4, 9);
+      if (I.guard) { // 攻撃＋殻: the shell it raises for your next turn
+        ctx.save(); Art.roundRectPath(ctx, x - 4, y - 6, 26, 15, 6); ctx.fillStyle = 'rgba(18,34,48,0.96)'; ctx.fill();
+        ctx.lineWidth = 1.4; ctx.strokeStyle = '#6fd3ff'; ctx.stroke(); ctx.restore();
+        numText(ctx, '殻' + I.guard, x + 9, y + 2, 10, '#bfefff');
+      }
       if (c.actChange) {
         // this resolve rewrites the boss's script: an exact cell of the next act, not reachable by 台本送り
         ctx.save(); ctx.font = `900 10px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';

@@ -2851,6 +2851,7 @@
     ossuary: { ground: battleGround, build: buildOssuary, backdrop: bdOssuary },
     gearworks: { ground: battleGround, build: buildGearworks, backdrop: bdGearworks },
     abyss: { ground: battleGround, build: buildAbyss, backdrop: bdAbyss },
+    ashdeep: { ground: battleGround, build: buildAbyss, backdrop: bdAbyss }, // 灰の底: the throne room's ruins (the scene greys it)
     camp: { ground: (W, H) => Math.round(H * 0.84), build: buildCamp, backdrop: bdCamp },
     title: { ground: (W, H) => Math.round(H * 0.8), build: buildTitle, backdrop: bdTitle },
   };

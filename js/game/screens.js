@@ -115,7 +115,8 @@ const TREE_SX = 1.12;
         <div class="rec"><span>最深</span><b>B${s.bestFloor || 0}</b></div>
         <div class="rec"><span>前回</span><b>B${s.lastFloor || 0}</b></div>
         <div class="rec"><span>三連</span><b>${s.triples}</b></div>
-        <div class="rec"><span>ボス最高</span><b>${s.bossKills ? '討伐 ' + s.bossKills + '回' : best}</b></div>`;
+        <div class="rec"><span>ボス最高</span><b>${s.bossKills ? '討伐 ' + s.bossKills + '回' : best}</b></div>` +
+        (s.deepRuns ? `<div class="rec"><span>灰の底</span><b>最深 B${s.deepBest}${s.deepClears ? '・踏破 ' + s.deepClears + '回' : ''}</b></div>` : '');
       const recN = SD.Meta.recommendedNode(p, p.seen.lastWhisper);
       if (recN) {
         const g = recN;
@@ -437,7 +438,8 @@ const TREE_SX = 1.12;
       const Z = SD.Data.ZONES[SD.Data.FLOORS[f] ? SD.Data.FLOORS[f].zone : 'abyss'];
       this.dom.floor.innerHTML = `<span class="b">B${f}</span><span class="z">${Z.name}</span>`;
       let html = '';
-      for (let k = 1; k <= SD.Data.LAST_FLOOR; k++) {
+      const lastBead = run.deep || run.floor > SD.Data.LAST_FLOOR ? SD.Data.DEEP_LAST_FLOOR : SD.Data.LAST_FLOOR;
+      for (let k = 1; k <= lastBead; k++) {
         const fl = SD.Data.FLOORS[k];
         const cls = ['bead', fl.type];
         if (k < run.floor) cls.push('done');
@@ -446,7 +448,7 @@ const TREE_SX = 1.12;
         if (k === p.stats.lastFloor) cls.push('last');
         html += `<span class="${cls.join(' ')}" title="B${k}"></span>`;
       }
-      html += `<span class="depth-lbl">${p.stats.bestFloor ? '最深 B' + p.stats.bestFloor : ''}</span>`;
+      html += `<span class="depth-lbl">${run.deep ? '灰の底' + (p.stats.deepBest ? ' 最深 B' + p.stats.deepBest : '') : p.stats.bestFloor ? '最深 B' + p.stats.bestFloor : ''}</span>`;
       this.dom.depth.innerHTML = html;
       this.dom.embers.innerHTML = '';
       this.dom.embers.appendChild(U.icon('ember', 26));
@@ -825,7 +827,13 @@ const TREE_SX = 1.12;
         const out = U.el('div', 'fc-out');
         out.innerHTML = after <= 0 ? '<b class="kill">撃破できる！</b>' : `敵HP <b>${e.hp}</b> → <b>${after}</b>`;
         if (R.sealBreaks) out.innerHTML += ` <span class="seal">封印-${R.sealBreaks}</span>`;
+        if (e.block > 0 && R.directDmg > 0 && after > 0) out.innerHTML += ` <span class="seal">殻${e.block}が先に受ける</span>`;
         el.appendChild(out);
+        if (SD.Data.ENEMIES[e.id] && SD.Data.ENEMIES[e.id].mirror && !label && run.phase === 'spun') {
+          const nx = this.band && this.band.cells.find((c) => c.role === 'next');
+          const sym = nx && !nx.cond && !nx.unknown && nx.it.now && nx.it.now.sym;
+          el.appendChild(U.el('div', 'fc-in', sym ? `次の封じ：<b>${SD.Data.SYMBOLS[sym].name}</b>（この列で発動した場合）` : '次の封じ：？（連鎖しだいで変わる）'));
+        }
         const it = e.intent;
         // a trine that waits: say why, once the player can plan around it
         const why = this.state === 'decision' && !label ? run.comboPauseReason() : null;
@@ -1107,7 +1115,7 @@ const TREE_SX = 1.12;
         case 'battle': return { name: '戦い', sub: E[d.enemy] ? E[d.enemy].name : '', tip: E[d.enemy] ? `<b>${E[d.enemy].name}</b><br>${E[d.enemy].tip}<br>報酬: 刻印` : '' };
         case 'dread': {
           const def = E[d.enemy], z = SD.Data.FLOORS[d.floor] ? SD.Data.FLOORS[d.floor].zone : 'cellar';
-          const k = Math.max(0, d.floor - SD.Data.ZONES[z].floors[0]);
+          const k = SD.Data.ZONES[z].deep ? 0 : Math.max(0, d.floor - SD.Data.ZONES[z].floors[0]);
           const hp = Math.round(def.hp * (1 + 0.12 * k) * (d.enemy === 'golem' ? 1.2 : 1.5));
           return { name: '怨念の敵', sub: def.name, tip: `<b>怨念の${def.name}</b>　HP ${hp}・攻撃×1.5<br>戦闘中リールに髑髏1。<br>報酬: <b>遺物</b>3択・残り火2倍` };
         }
@@ -1230,11 +1238,44 @@ const TREE_SX = 1.12;
     }
 
     // ------------------------------------------------------------------ end of run
+    // 灰輪の主 beaten after a clear: the win is written to the profile now (once); then 帰還 / さらに降りる
+    onBossSettled(summary) {
+      const G = SD.Game, p = this.profile;
+      this.settledPrev = { best: p.stats.bestFloor, last: p.stats.lastFloor, bossBest: p.stats.bossBestHpPct, embers: p.embers };
+      this.settledRes = SD.Meta.applyRunResult(p, summary);
+      G.save();
+      this.showDescentChoice();
+    }
+    showDescentChoice() {
+      const U = UI();
+      this.state = 'modal';
+      if (this.dom.right) this.dom.right.style.visibility = 'hidden';
+      this.renderLeft();
+      this.refreshButtons();
+      const m = this.dom.modal;
+      m.innerHTML = ''; m.classList.add('show');
+      const box = U.el('div', 'event-box descent-box');
+      box.appendChild(U.el('div', 'event-glyph', '灰'));
+      box.appendChild(U.el('div', 'event-name', '灰輪の主を討った'));
+      box.appendChild(U.el('div', 'event-text', '勝利は確定した（記録と残り火は保存済み）。<br>灰輪の下に、まだ<b>灰の底</b>が続いている。'));
+      const opts = U.el('div', 'event-opts');
+      const go = (down) => { if (this.run.phase !== 'descent') return; const evs = this.run.chooseDescent(down); this.closeModal(); this.play(evs); };
+      opts.appendChild(U.button('さらに降りる<small>灰の底 B13〜B16。重ね殻と返し鏡に必ず出会う。倒れても勝利は失わない</small>', 'event-opt', () => go(true)));
+      opts.appendChild(U.button('帰還する<small>ここで降下を終える</small>', 'event-opt', () => go(false)));
+      box.appendChild(opts);
+      m.appendChild(box);
+    }
+
     onRunEnd(summary) {
       const G = SD.Game, p = this.profile;
-      const prev = { best: p.stats.bestFloor, last: p.stats.lastFloor, bossBest: p.stats.bossBestHpPct, embers: p.embers };
+      const settled = !!summary.settled;
+      const prev = settled && this.settledPrev ? this.settledPrev : { best: p.stats.bestFloor, last: p.stats.lastFloor, bossBest: p.stats.bossBestHpPct, embers: p.embers };
       const prevBestVs = (p.stats.bestVs || {})[summary.killer ? summary.killer.id : ''];
-      const res = SD.Meta.applyRunResult(p, summary);
+      // a settled win was applied at the boss: 帰還 adds nothing, a descent adds only what it gained
+      let res;
+      if (!settled) res = SD.Meta.applyRunResult(p, summary);
+      else if (summary.deep) res = Object.assign({}, this.settledRes || {}, SD.Meta.applyDeepResult(p, summary));
+      else res = this.settledRes || {};
       G.save();
       this.state = 'end';
       this.refreshButtons();
@@ -1309,7 +1350,9 @@ const TREE_SX = 1.12;
         cell('最大の一撃', st.maxHit);
         cell('灯した灯紋', `${lit} / ${all}`);
         box.appendChild(grid);
-        if (st.bossKills <= 1) box.appendChild(U.el('div', 'win-note', '最初は祈るだけだった灯輪を、三人はいま自分の手で廻している。<br>灯紋はまだ残っている――別の道で、もう一度深淵へ。'));
+        if (summary.deep) box.appendChild(U.el('div', 'win-note deep', summary.deep.cleared ? '<b>灰の底を越えた。</b>深淵の修道院長を討った。' : `<b>灰の底 B${summary.deep.floor} で力尽きた。</b>灰輪の主を討った勝利は、そのまま残る。`));
+        else if (st.bossKills <= 1) box.appendChild(U.el('div', 'win-note', '最初は祈るだけだった灯輪を、三人はいま自分の手で廻している。<br>灯紋はまだ残っている――別の道で、もう一度深淵へ。'));
+        if (!summary.settled && st.wins === 1) box.appendChild(U.el('div', 'win-note deep', '<b>灰の底が開いた。</b>次の挑戦から、灰輪の主を倒した先へ降りられる。'));
       } else {
         box.appendChild(U.el('div', 'end-title', `B${Math.max(summary.floor, summary.startFloor || 1)} で灯が消えた`));
         const k = summary.killer;
@@ -1328,7 +1371,9 @@ const TREE_SX = 1.12;
       if (res.newBossRecord) rec.appendChild(U.el('span', 'chip new', 'ボス最高記録'));
       if (res.firstHound) rec.appendChild(U.el('span', 'chip new', '第二層への近道が開いた'));
       if (res.firstAbbot) rec.appendChild(U.el('span', 'chip new', '近道で選べる遺物 +1'));
-      if (summary.floor > prev.last && prev.last > 0) rec.appendChild(U.el('span', 'chip up', `前回より ${summary.floor - prev.last} 階深く`));
+      if (res.newDeepBest) rec.appendChild(U.el('span', 'chip new', `灰の底 最深 B${summary.floor}`));
+      if (res.firstDeepClear) rec.appendChild(U.el('span', 'chip new', '灰の底 初踏破'));
+      if (!summary.deep && summary.floor > prev.last && prev.last > 0) rec.appendChild(U.el('span', 'chip up', `前回より ${summary.floor - prev.last} 階深く`));
       if (summary.stats.triples) rec.appendChild(U.el('span', 'chip', `三連 ${summary.stats.triples}`));
       box.appendChild(rec);
       // embers tally

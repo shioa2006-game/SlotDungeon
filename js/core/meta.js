@@ -19,6 +19,7 @@
         eliteKills: {},        // enemyId -> count
         maxHit: 0,
         lastRun: null,         // summary of last run (for death-screen comparisons)
+        deepRuns: 0, deepBest: 0, deepClears: 0, // 灰の底: descents, deepest floor, B16 cleared
       },
       seen: {},                // tutorial / first-time flags
       // comboPause: 'smart' = once 継ぎ留め/拍子木 are lit, a trine/bond waits for you while something can still be done; 'off' = always fires
@@ -191,6 +192,7 @@
       shrines: st.runs >= 2,
       shortcuts: Object.keys(D().SHORTCUTS).map(Number).filter((f) => (st.eliteKills[D().SHORTCUTS[f].gate] || 0) > 0),
       abbotBonus: (st.eliteKills.abbot || 0) > 0,
+      deepUnlocked: (st.wins || 0) > 0, // after the first clear, 灰輪の主 can be followed into 灰の底
     };
     if (m.sparks) { m.startSparks = 2; m.maxSparks = 3; m.sparkPerWin = 1; }
     if (!m.sparks) m.borrow = false;
@@ -198,6 +200,30 @@
     if (u('cloak')) m.maxHp += 10;
     if (u('toughness')) m.maxHp += 15;
     return m;
+  }
+
+  // 灰の底: fold in only what the descent added (the boss win was applied when it was settled). Never touches runs / wins /
+  // deaths / boss kills. Returns { newDeepBest, firstDeepClear }.
+  function applyDeepResult(profile, summary) {
+    const s = profile.stats, d = summary.deep;
+    const res = { newDeepBest: summary.floor > (s.deepBest || 0), firstDeepClear: d.cleared && !(s.deepClears > 0), prevDeepBest: s.deepBest || 0 };
+    s.deepRuns = (s.deepRuns || 0) + 1;
+    s.deepBest = Math.max(s.deepBest || 0, summary.floor);
+    if (d.cleared) s.deepClears = (s.deepClears || 0) + 1;
+    s.kills += d.kills;
+    s.triples += d.triples;
+    s.bonds += d.bonds;
+    s.maxHit = Math.max(s.maxHit || 0, summary.stats.maxHit || 0);
+    for (const id of d.eliteKills) s.eliteKills[id] = (s.eliteKills[id] || 0) + 1;
+    s.totalEmbers += d.embers;
+    profile.embers += d.embers;
+    s.lastRun = Object.assign({}, s.lastRun, { embers: ((s.lastRun && s.lastRun.embers) || 0) + d.embers, deepFloor: summary.floor, deepCleared: d.cleared });
+    return res;
+  }
+  // A whole finished run in one call (tools / tests): a settled boss win plus its descent is applied exactly once.
+  function applyFinishedRun(profile, summary) {
+    if (summary.deep) { const res = applyRunResult(profile, summary.base); return Object.assign(res, applyDeepResult(profile, summary)); }
+    return applyRunResult(profile, summary);
   }
 
   // Fold a finished run summary into the profile. Returns { newBestFloor, newBossRecord }.
@@ -232,6 +258,6 @@
 
   SD.Meta = {
     SAVE_KEY, newProfile, load, save, reset,
-    isUnlocked, isReachable, canUnlock, unlock, nextGoals, recommendedNode, computeMods, applyRunResult, gateOk,
+    isUnlocked, isReachable, canUnlock, unlock, nextGoals, recommendedNode, computeMods, applyRunResult, applyDeepResult, applyFinishedRun, gateOk,
   };
 })();

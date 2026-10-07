@@ -4,6 +4,11 @@
  *   node tools/sim.js boss <kit> [n]           boss fight win-rate for a fixed kit
  *   node tools/sim.js metrics <strategy> [n]   campaign + agency metrics (locked turns, borrows, sends, fight-length p95)
  *   node tools/sim.js script [n]               灰輪の台本: what each build sends the script for, per enemy
+ *   node tools/sim.js baseline <strategy> [n]  past the first clear until the whole tree is lit (+5 runs): tree left at the clear,
+ *                                              embers/run after it, and per growth stage the fights' length, 1-turn kills and
+ *                                              "decision turns" (turns the UI stops on: shouldAutoResolve() false). BASELINE_JSON=path saves raw data.
+ *                                              After the clear the bot always takes 灰の底 (さらに降りる); [F] reports the descent.
+ *   node tools/sim.js deep [n]                 灰の底: each kit against 重ね殻 / 返し鏡 / 深淵の修道院長 on a late-run board (which branch answers which enemy)
  * Bots play through the real engine (js/core). NOSCRIPT=1 keeps the bots from using 拍子木 / 借り火 even when lit. */
 'use strict';
 const path = require('path');
@@ -169,12 +174,18 @@ function doAct(run, act) {
 
 function playTurn(run, smart) {
   run.spin();
+  // baseline mode: would the game stop for the player on this spin? (pure previews: the run and its RNG are untouched)
+  const M = LOG.measure && run.phase === 'spun' ? LOG.turn : null;
+  if (M && !run.shouldAutoResolve()) M.dec++;
   for (let step = 0; step < 8; step++) {
     if (run.phase !== 'spun') return;
     const act = bestAction(run, smart);
     if (!act) break;
     doAct(run, act);
+    if (M && step === 0) M.acted++;
   }
+  // first turn of the fight: the damage the chosen line deals, vs the enemy's max HP (headroom for new enemies)
+  if (M && run.phase === 'spun' && M.t++ === 0) M.dmg1 = run.forecast().totalDmg;
   if (run.phase === 'spun') run.resolve();
 }
 
@@ -183,9 +194,10 @@ function offerScore(run, o) {
   const hpPct = run.hp / run.maxHp;
   switch (o.kind) {
     case 'relic': return 5 + botRng.next();
-    case 'add': return { blade: 3, flame: 2.6, ward: 2, heart: 2, lantern: 0.5, wild: 6, skull: run.mods.skullPact ? 2 : -5 }[o.sym] || 0;
+    // LOG.symPref (optional, set by analysis scripts): a build's carving taste { blade: 6, flame: 2, ... }; unset = the default bot
+    case 'add': if (LOG.symPref && LOG.symPref[o.sym] != null) return LOG.symPref[o.sym]; return { blade: 3, flame: 2.6, ward: 2, heart: 2, lantern: 0.5, wild: 6, skull: run.mods.skullPact ? 2 : -5 }[o.sym] || 0;
     case 'add2': return 4.5;
-    case 'transmute': return (o.from === 'lantern' || o.from === 'skull' ? 3 : 0.5) + (o.to === 'blade' ? 0.5 : 0);
+    case 'transmute': return (o.from === 'lantern' || o.from === 'skull' ? 3 : 0.5) + (LOG.symPref ? (LOG.symPref[o.to] || 0) * 0.3 : o.to === 'blade' ? 0.5 : 0);
     case 'remove': return o.sym === 'skull' ? 5 : o.sym === 'lantern' ? 1.5 : 0.2;
     case 'gild': return 4;
     case 'heal': return hpPct < 0.5 ? 7 : hpPct < 0.75 ? 3 : 0.5;
@@ -205,6 +217,7 @@ function doorScore(run, d) {
   }
 }
 function handleBetween(run) {
+  if (run.phase === 'descent') { run.chooseDescent(LOG.descend !== false); return; }
   if (run.phase === 'crossroads') {
     let oi = null;
     if (run.offers && run.offers.length) {
@@ -230,7 +243,8 @@ function handleBetween(run) {
     run.chooseEvent(pick);
   } else if (run.phase === 'chisel') {
     // remove skulls, then lanterns, then the least useful symbol; duplicate: the most useful
-    const pref = run.chisel.mode === 'remove' ? ['skull', 'lantern', 'ward', 'heart', 'flame', 'blade'] : ['wild', 'blade', 'flame'];
+    let pref = run.chisel.mode === 'remove' ? ['skull', 'lantern', 'ward', 'heart', 'flame', 'blade'] : ['wild', 'blade', 'flame'];
+    if (LOG.symPref) { const P = LOG.symPref, by = ['skull', 'lantern', 'ward', 'heart', 'flame', 'blade'].sort((a, b) => (P[a] || 0) - (P[b] || 0)); pref = run.chisel.mode === 'remove' ? by : ['wild'].concat(by.slice().reverse().filter((s) => s !== 'skull' && s !== 'lantern')); }
     let done = false;
     for (const s of pref) {
       for (let ri = 0; ri < run.reels.length && !done; ri++) {
@@ -250,11 +264,23 @@ function playRun(profile, opts = {}) {
   run.begin();
   let guard = 0;
   let decisions = 0;
-  let fightEnemy = null, fightTurns = 0;
-  const endFight = () => { if (fightEnemy) LOG.fights.push({ enemy: fightEnemy.id, turns: fightTurns, kit: LOG.kit || '' }); fightEnemy = null; fightTurns = 0; };
+  let fightEnemy = null, fightTurns = 0, fightFloor = 0;
+  const endFight = () => {
+    if (fightEnemy) {
+      LOG.fights.push({ enemy: fightEnemy.id, turns: fightTurns, kit: LOG.kit || '' });
+      if (LOG.measure) {
+        const E = SD.Data.ENEMIES[fightEnemy.id] || {};
+        LOG.mfights.push(Object.assign({ enemy: fightEnemy.id, cat: E.boss ? 'boss' : E.elite ? 'elite' : 'normal', floor: fightFloor, turns: fightTurns,
+          kill: fightEnemy.hp <= 0, stage: LOG.stage, tree: LOG.tree }, LOG.turn));
+      }
+    }
+    fightEnemy = null; fightTurns = 0;
+  };
+  let settleDec = null;
   while (run.phase !== 'dead' && run.phase !== 'won' && guard++ < 5000) {
+    if (run.phase === 'descent' && settleDec == null) settleDec = decisions;
     if (run.phase === 'idle') {
-      if (run.enemy !== fightEnemy) { endFight(); fightEnemy = run.enemy; }
+      if (run.enemy !== fightEnemy) { endFight(); fightEnemy = run.enemy; fightFloor = run.floor; if (LOG.measure) LOG.turn = { dec: 0, acted: 0, t: 0, dmg1: 0, maxHp: run.enemy.maxHp }; }
       fightTurns++;
       playTurn(run, opts.smart !== false);
     } else { endFight(); handleBetween(run); decisions++; }
@@ -263,7 +289,9 @@ function playRun(profile, opts = {}) {
   const s = run.summary;
   s.decisions = decisions;
   const manual = run.mods.sparks ? Math.round(s.stats.turns * 0.7) : 0;
+  const est = (st, dec, floor) => Math.round(st.turns * 2.6 + (run.mods.sparks ? Math.round(st.turns * 0.7) : 0) * 2.0 + (st.triples + st.bonds) * 0.7 + (st.nudges + st.respins + (st.advances || 0) + (st.borrows || 0)) * 1.2 + dec * 6 + floor * 3.5 + 25);
   s.estSeconds = Math.round(s.stats.turns * 2.6 + manual * 2.0 + (s.stats.triples + s.stats.bonds) * 0.7 + (s.stats.nudges + s.stats.respins + (s.stats.advances || 0) + (s.stats.borrows || 0)) * 1.2 + decisions * 6 + s.floor * 3.5 + 25);
+  if (s.deep && s.base) s.baseSeconds = est(s.base.stats, settleDec || decisions, s.base.floor);
   return { run, summary: s };
 }
 
@@ -303,7 +331,7 @@ function campaign(strategy, seed) {
     const mods = SD.Meta.computeMods(profile);
     const start = mods.shortcuts.length ? Math.max(...mods.shortcuts) : 1;
     const { summary } = playRun(profile, { seed: seed * 1000 + i, startFloor: start, smart: true });
-    SD.Meta.applyRunResult(profile, summary);
+    SD.Meta.applyFinishedRun(profile, summary);
     total += summary.estSeconds;
     const bought = buyNodes(profile, strategy);
     const st = summary.stats;
@@ -315,7 +343,48 @@ function campaign(strategy, seed) {
   return { log, minutes: total / 60, won: log[log.length - 1].won, runs: log.length };
 }
 
-module.exports = { playTurn, handleBetween, playRun, buyNodes, campaign, LOG };
+// ------------------------------------------------------------------ baseline: the first clear, then on until the whole tree is lit
+// After the clear the bot keeps its strategy order, then buys the cheapest reachable node (a player finishing the tree).
+function buyNodesAll(profile, strategy) {
+  const bought = buyNodes(profile, strategy);
+  for (let guard = 0; guard < 60; guard++) {
+    const opts = SD.Data.SKILLS.filter((s) => !profile.unlocked[s.id] && SD.Meta.isReachable(profile, s.id)).sort((a, b) => a.cost - b.cost);
+    if (!opts.length || !SD.Meta.canUnlock(profile, opts[0].id)) break;
+    SD.Meta.unlock(profile, opts[0].id);
+    bought.push(opts[0].id);
+  }
+  return bought;
+}
+const treeOwned = (profile) => SD.Data.SKILLS.filter((s) => profile.unlocked[s.id]).length;
+const treeLeftCost = (profile) => SD.Data.SKILLS.filter((s) => !profile.unlocked[s.id]).reduce((t, s) => t + s.cost, 0);
+function baselineCampaign(strategy, seed, opts = {}) {
+  const FULL_RUNS = opts.fullRuns || 5, CAP = opts.cap || 150;
+  const profile = SD.Meta.newProfile();
+  const runs = [];
+  let clear = null, fullAt = null, sec = 0;
+  for (let i = 0; i < CAP; i++) {
+    const full = treeOwned(profile) === SD.Data.SKILLS.length;
+    LOG.stage = !clear ? 'pre' : full ? 'full' : 'post';
+    LOG.tree = treeOwned(profile);
+    const mods = SD.Meta.computeMods(profile);
+    const start = mods.shortcuts.length ? Math.max(...mods.shortcuts) : 1;
+    const { summary } = playRun(profile, { seed: seed * 1000 + i, startFloor: start, smart: true });
+    SD.Meta.applyFinishedRun(profile, summary);
+    sec += summary.estSeconds;
+    runs.push({ i: i + 1, stage: LOG.stage, tree: LOG.tree, start, floor: summary.floor, won: !!summary.won, embers: summary.embers, sec: summary.estSeconds,
+      deep: summary.deep ? { floor: summary.floor, cleared: summary.deep.cleared, embers: summary.deep.embers, sec: summary.estSeconds - summary.baseSeconds } : null });
+    if (summary.won && !clear) {
+      clear = { runs: i + 1, min: sec / 60, owned: treeOwned(profile), leftNodes: SD.Data.SKILLS.length - treeOwned(profile), leftCost: treeLeftCost(profile), embersInHand: profile.embers };
+    }
+    // before the clear: exactly the campaign's buying; after it: finish the tree
+    if (!clear || runs.length === clear.runs) buyNodes(profile, strategy); else buyNodesAll(profile, strategy);
+    if (clear && !fullAt && treeOwned(profile) === SD.Data.SKILLS.length) fullAt = { runs: i + 1, min: sec / 60 };
+    if (fullAt && i + 1 >= fullAt.runs + FULL_RUNS) break;
+  }
+  return { clear, fullAt, runs, min: sec / 60 };
+}
+
+module.exports = { playTurn, handleBetween, playRun, buyNodes, campaign, baselineCampaign, LOG };
 if (require.main !== module && !process.env.SIM_CLI) return;
 // ------------------------------------------------------------------ CLI
 const [, , mode = 'run1', a1, a2] = process.argv;
@@ -450,6 +519,104 @@ if (mode === 'run1') {
       console.log(`  ${kit.padEnd(9)} win ${(wins / fights * 100).toFixed(0)}%  turns/fight ${(turns / fights).toFixed(1)}  sends/fight ${(sends / fights).toFixed(2)}  called a heavy early ${heavyPull}  borrows ${LOG.borrows.length}`);
       console.log(`            ${top || '(never sent)'}`);
     }
+  }
+}
+if (mode === 'baseline') {
+  const strategy = a1 || 'balanced', n = +a2 || 10;
+  LOG.measure = true; LOG.mfights = []; LOG.kit = strategy;
+  const res = [];
+  for (let s = 1; s <= n; s++) res.push(baselineCampaign(strategy, s));
+  const f1 = (x) => (Number.isFinite(x) ? x.toFixed(1) : '-'), f0 = (x) => (Number.isFinite(x) ? x.toFixed(0) : '-');
+  const mean = (a) => (a.length ? a.reduce((t, x) => t + x, 0) / a.length : NaN);
+  const C = res.filter((r) => r.clear), F = res.filter((r) => r.fullAt);
+  console.log(`baseline ${strategy}: n=${n}  cleared ${C.length}/${n}  tree completed ${F.length}/${n}  (nodes ${SD.Data.SKILLS.length}, total cost ${SD.Data.SKILLS.reduce((t, s) => t + s.cost, 0)})`);
+  console.log('\n[A] at the first clear (median)');
+  console.log(`  runs ${median(C.map((r) => r.clear.runs))}  minutes ${f1(median(C.map((r) => r.clear.min)))}  nodes owned ${median(C.map((r) => r.clear.owned))}  nodes left ${median(C.map((r) => r.clear.leftNodes))}  cost left ${median(C.map((r) => r.clear.leftCost))}  embers in hand ${median(C.map((r) => r.clear.embersInHand))}`);
+  console.log('\n[B] from the first clear to the whole tree');
+  const post = C.flatMap((r) => r.runs.filter((x) => x.stage === 'post'));
+  console.log(`  runs ${median(F.map((r) => r.fullAt.runs - r.clear.runs))}  minutes ${f1(median(F.map((r) => r.fullAt.min - r.clear.min)))}  embers/run mean ${f0(mean(post.map((x) => x.embers)))} (median ${median(post.map((x) => x.embers))})  win rate ${f0(mean(post.map((x) => (x.won ? 100 : 0))))}%  min/run ${f1(mean(post.map((x) => x.sec / 60)))}`);
+  const pre = res.flatMap((r) => r.runs.filter((x) => x.stage === 'pre')), full = res.flatMap((r) => r.runs.filter((x) => x.stage === 'full'));
+  console.log(`  (for scale) before the clear: embers/run mean ${f0(mean(pre.map((x) => x.embers)))}  min/run ${f1(mean(pre.map((x) => x.sec / 60)))};  full tree: win rate ${f0(mean(full.map((x) => (x.won ? 100 : 0))))}%  min/run ${f1(mean(full.map((x) => x.sec / 60)))}`);
+  // fights by growth stage and kind
+  const row = (label, fs) => {
+    if (!fs.length) return console.log(`  ${label.padEnd(22)} (none)`);
+    const kills = fs.filter((x) => x.kill);
+    console.log(`  ${label.padEnd(22)} fights ${String(fs.length).padStart(5)}  turns med ${median(fs.map((x) => x.turns))} p90 ${pct(fs.map((x) => x.turns), 0.9)}  1-turn kill ${f0(kills.filter((x) => x.turns === 1).length / fs.length * 100).padStart(3)}%` +
+      `  turn-1 dmg/maxHP med ${(median(fs.map((x) => x.dmg1 / x.maxHp)) || 0).toFixed(2)}  decision turns/fight ${f1(mean(fs.map((x) => x.dec)))}  fights with a decision ${f0(fs.filter((x) => x.dec > 0).length / fs.length * 100).padStart(3)}%  bot acted/fight ${f1(mean(fs.map((x) => x.acted)))}  lost ${f0(fs.filter((x) => !x.kill).length / fs.length * 100)}%`);
+  };
+  const MF = LOG.mfights;
+  for (const [st, name] of [['pre', 'before the clear'], ['post', 'after the clear'], ['full', 'whole tree lit']]) {
+    console.log(`\n[C] ${name}`);
+    const runsAt = res.flatMap((r) => r.runs.filter((x) => x.stage === st));
+    const fs = MF.filter((x) => x.stage === st);
+    console.log(`  runs ${runsAt.length}  fights per run ${f1(fs.length / Math.max(1, runsAt.length))}  (normal ${f1(fs.filter((x) => x.cat === 'normal').length / Math.max(1, runsAt.length))})`);
+    for (const cat of ['normal', 'elite', 'boss']) row(cat, fs.filter((x) => x.cat === cat));
+  }
+  console.log('\n[D] normal fights by share of the tree lit at the run start');
+  const N = SD.Data.SKILLS.length;
+  for (const [lo, hi] of [[0, 0.25], [0.25, 0.5], [0.5, 0.75], [0.75, 1], [1, 1.01]]) {
+    row(hi > 1 ? '100%' : `${Math.round(lo * 100)}-${Math.round(hi * 100)}%`, MF.filter((x) => x.cat === 'normal' && x.tree / N >= lo && x.tree / N < hi));
+  }
+  console.log('\n[E] after the clear, per normal enemy: 1-turn kill % / decision turns per fight');
+  const byE = {};
+  for (const x of MF.filter((y) => y.stage !== 'pre' && y.cat === 'normal')) (byE[x.enemy] = byE[x.enemy] || []).push(x);
+  console.log('  ' + Object.keys(byE).sort().map((k) => `${k} ${f0(byE[k].filter((x) => x.kill && x.turns === 1).length / byE[k].length * 100)}%/${f1(mean(byE[k].map((x) => x.dec)))} (n${byE[k].length})`).join('  '));
+  console.log('\n[F] 灰の底 (the bot always descends after a settled boss win)');
+  for (const [st, name, pick] of [['post', 'first 2 boss wins after the clear', (r) => r.runs.filter((x) => x.stage === 'post' && x.deep).slice(0, 2)],
+    ['post', 'after the clear (all)', (r) => r.runs.filter((x) => x.stage === 'post' && x.deep)], ['full', 'whole tree lit', (r) => r.runs.filter((x) => x.stage === 'full' && x.deep)]]) {
+    const D = res.flatMap(pick);
+    if (!D.length) { console.log(`  ${name.padEnd(34)} (no descents)`); continue; }
+    const at = (f) => f0(D.filter((x) => x.deep.floor >= f || x.deep.cleared).length / D.length * 100);
+    console.log(`  ${name.padEnd(34)} descents ${String(D.length).padStart(4)}  reached B14 ${at(14)}%  B15 ${at(15)}%  B16 ${at(16)}%  cleared ${f0(D.filter((x) => x.deep.cleared).length / D.length * 100)}%` +
+      `  extra minutes ${f1(mean(D.map((x) => x.deep.sec / 60)))}  embers from the descent ${f0(mean(D.map((x) => x.deep.embers)))}`);
+  }
+  for (const [st, name] of [['post', 'after the clear'], ['full', 'whole tree lit']]) {
+    console.log(`  -- fights in 灰の底, ${name}`);
+    for (const id of ['husk', 'mirror', 'abbot_deep']) row(`${SD.Data.ENEMIES[id].name}`, MF.filter((x) => x.stage === st && x.enemy === id && x.floor >= 13));
+  }
+  if (process.env.BASELINE_JSON) require('fs').writeFileSync(process.env.BASELINE_JSON, JSON.stringify({ strategy, n, res: res.map((r) => ({ clear: r.clear, fullAt: r.fullAt, runs: r.runs })), fights: MF }));
+}
+if (mode === 'deep') {
+  // Which branch answers which enemy: every kit fights each 灰の底 enemy on a rich late-run board (10 carvings + 3 relics).
+  const n = +a1 || 150;
+  const kits = ['valor', 'burn+A', 'thorns+A', 'weave+A', 'hearth', 'mastery+A'];
+  // controls (this mode only): the same enemy without its own rule, to see what the rule costs each kit
+  const E = SD.Data.ENEMIES;
+  E.husk_ctl = Object.assign({}, E.husk, { name: '重ね殻（殻なしの対照）', startBlock: 0, ai: (e) => Object.assign({}, E.husk.ai(e), { guard: 0 }) });
+  E.mirror_ctl = Object.assign({}, E.mirror, { name: '返し鏡（封じなしの対照）', mirror: false, ai: (e, r) => Object.assign({}, E.mirror.ai(e, r), { now: null }) });
+  const foes = [['husk', 13], ['husk_ctl', 13], ['mirror', 14], ['mirror_ctl', 14], ['abbot_deep', 16]];
+  const by = {};
+  for (const [foe, floor] of foes) {
+    console.log(`\n${SD.Data.ENEMIES[foe].name} (${foe}, B${floor})`);
+    for (const kit of kits) {
+      let wins = 0, fights = 0, one = 0; const tl = [];
+      for (let i = 0; i < n; i++) {
+        botRng = SD.Util.makeRng(6000 + i);
+        const run = new SD.Run(SD.Meta.computeMods(kitProfile(kit)), { seed: 9500 + i, startFloor: 9 });
+        for (let k = 0; k < 10; k++) run.pending.push('carving');
+        run.pending.push('relic', 'relic', 'relic');
+        run.begin();
+        let g = 0;
+        while (run.phase !== 'idle' && run.phase !== 'dead' && run.phase !== 'won' && g++ < 80) handleBetween(run);
+        if (run.phase !== 'idle') continue;
+        run.event = null; run.chisel = null; run.offers = null; run.doors = null; run.pending = [];
+        run.floor = floor; run.enemy = null; run.fight = null;
+        run._startCombat(foe, {});
+        run.hp = Math.round(run.maxHp * 0.85);
+        fights++;
+        const e = run.enemy; let t = 0;
+        while (run.enemy === e && run.phase === 'idle' && t < 60) { playTurn(run, true); t++; }
+        const won = run.phase === 'won' || (run.enemy !== e && run.phase !== 'dead') || e.hp <= 0;
+        if (won) { wins++; tl.push(t); if (t === 1) one++; }
+      }
+      by[foe + '|' + kit] = { mean: tl.reduce((s, x) => s + x, 0) / Math.max(1, tl.length), win: wins / Math.max(1, fights) };
+      console.log(`  ${kit.padEnd(10)} win ${(wins / Math.max(1, fights) * 100).toFixed(0).padStart(3)}%  turns to win: median ${median(tl)}  mean ${(tl.reduce((s, x) => s + x, 0) / Math.max(1, tl.length)).toFixed(2)}  1-turn kills ${(one / Math.max(1, fights) * 100).toFixed(0)}%`);
+    }
+  }
+  console.log('\nwhat the rule costs each kit vs the control (extra turns to win, ratio, win-rate change)');
+  for (const [foe, ctl] of [['husk', 'husk_ctl'], ['mirror', 'mirror_ctl']]) {
+    console.log(`  ${E[foe].name}:`);
+    for (const k of kits) { const a = by[foe + '|' + k], b = by[ctl + '|' + k]; console.log(`    ${k.padEnd(10)} +${(a.mean - b.mean).toFixed(1)} turns  ×${(a.mean / b.mean).toFixed(2)}  win ${Math.round((a.win - b.win) * 100)}%`); }
   }
 }
 function median(a) { if (!a.length) return NaN; const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; }

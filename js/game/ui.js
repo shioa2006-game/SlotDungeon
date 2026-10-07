@@ -175,7 +175,11 @@
     if (c.role === 'debt') lines.push('<b>借りの代償</b>：灰輪はこの一手も、このターンのうちに行う');
     if (c.cond) lines.push(`<span style="color:#e2c8ff">？ ${UI.BAND_COND[c.cond] || '変わる可能性がある'}</span>`);
     if (c.locked && run.mods.script) lines.push('<span style="color:#e8bf6a">溜め終えた一撃は台本から外せない（早めることはできる）</span>');
+    if (c.actChange) lines.push(`<span style="color:#e2c8ff"><b>幕</b>：この発動で灰輪は第${c.actChange}幕へ移り、台本が書き換わる。これは新しい幕のコマで、台本送りでは届かない（送ると今の幕の次のコマになる）</span>`);
     if (c.role === 'next' && !c.cond && !c.unknown) lines.push('<span style="color:#b9ad95">このまま発動すれば、次のターンはこれになる</span>');
+    const e = run.enemy;
+    if (e && e.boss && e.seals > 0 && c.role !== 'now' && !c.actChange && c.it && (c.it.k === 'attack' || c.it.k === 'jam'))
+      lines.push('<span style="color:#b9ad95">封印中の灰輪は実ターンごとに加速する。台本送り・借りで早めたコマは、今の加速の値で行われる</span>');
     return lines.join('<br>');
   };
 

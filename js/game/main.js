@@ -96,10 +96,11 @@
     box.appendChild(sp);
     box.appendChild(U.el('div', 'set-note', 'Shift を押している間は早送り'));
     // a trine/bond waits for the player once 継ぎ留め / 拍子木 are lit (can be turned off)
-    const cp = U.el('div', 'set-row');
-    cp.appendChild(U.el('span', '', '三連で止まる<small style="display:block;color:#b9ad95">継ぎ留め・拍子木の後</small>'));
+    const cp = U.el('div', 'set-row stack');
+    const cpOn = !!(p.unlocked && (p.unlocked.stasis || p.unlocked.hyoshigi));
+    cp.appendChild(U.el('span', '', `三連・絆で止まる<small style="display:block;color:#b9ad95">継ぎ留めか拍子木を灯した後、撃破しない三連で、まだ操作できる時だけ${cpOn ? '' : '（まだ未解放：今は常にすぐ発動）'}</small>`));
     const cw = U.el('div', 'speed-btns');
-    for (const [v, lbl] of [['smart', '止まる'], ['off', 'すぐ発動']]) {
+    for (const [v, lbl] of [['smart', '操作できる時は止まる'], ['off', '常にすぐ発動']]) {
       const bb = U.button(lbl, 'mini' + ((p.settings.comboPause || 'smart') === v ? ' on' : ''), () => {
         p.settings.comboPause = v; Game.save();
         [...cw.children].forEach((c) => c.classList.toggle('on', c === bb));

@@ -300,22 +300,7 @@ function unit() {
     k.fight.freeRespinUsed = true; k.fight.freeNudgeLeft = 0; k.mods = Object.assign({}, k.mods, { nudge: false });
     k.spin(); setPayline(k, ['blade', 'blade', 'heart']);
     ok(k.borrowWorthwhile(), 'borrow + 運命の鍵 into a trine is worth stopping for');
-    // a debt the fight ended before collecting is carried to the next enemy
-    const c = fightRun(SD, ['nudge', 'respin', 'borrow'], 'moth', 6, { sparks: 0 });
-    c.enemy.hp = 4;
-    c.spin(); setPayline(c, ['blade', 'heart', 'ward']);
-    c.borrow();
-    const ev = c.resolve();
-    ok(ev.some((x) => x.t === 'enemyDie') && c.debtCarry, 'enemy killed on the borrowing turn: the debt is carried');
-    c.phase = 'start'; c.floor = 7;
-    const ev2 = c._startCombat('sentry', {});
-    ok(ev2.some((x) => x.t === 'debtCarried') && c.fight.debt && !c.debtCarry, 'the next enemy collects it');
-    const IB = c.scriptBand();
-    eq(IB.cells.map((x) => x.role), ['now', 'debt', 'next', 'next2'], 'and the band shows it before the first spin');
-    c.spin();
-    ok(!c.canBorrow(), 'no new borrowing while a debt is owed');
-    const ev3 = c.resolve();
-    eq(ev3.filter((x) => x.t === 'debtAction').length, 1, 'collected exactly once');
+    // (the debt carry-over to the next fight was removed by the AE audit: see section "AE audit")
     // dice-drawn debt: the forecast does not reveal it
     const rat = fightRun(SD, ['nudge', 'respin', 'borrow'], 'rat', 2, { sparks: 0 });
     rat.enemy.intent = { k: 'attack', v: 5 }; rat.enemy.lastK = 'attack'; rat.enemy.cursor = 2;
@@ -324,6 +309,109 @@ function unit() {
     const B = rat.scriptBand();
     const dc = B.cells.find((x) => x.role === 'debt');
     ok(P.random && dc && dc.unknown && dc.dmg == null, 'a dice-drawn debt cell is unknown and its damage is not shown');
+  }
+
+  section('AE audit (2026-10-08): 0-spark stops, debt inside the fight, sends, act changes, combo pause');
+  {
+    // 1. 0 sparks + borrow unused + a borrowed nudge that keeps the party alive -> the turn waits
+    const a = fightRun(SD, ['nudge', 'respin', 'borrow'], 'sentry', 6, { sparks: 0 });
+    a.fight.freeRespinUsed = true;
+    a.spin(); setPayline(a, ['ward', 'blade', 'flame']);
+    { const r = a.reels[1]; r.strip[(r.pos + 1) % r.strip.length].s = 'ward'; }
+    a.hp = 3;
+    ok(a.previewTurn().partyDies, '(setup) lethal without borrowing');
+    ok(a.borrowWorthwhile() && a.needsDecision() && !a.shouldAutoResolve(), '1. lethal turn, a borrowed ward pair saves: the turn waits (borrow / accept)');
+    // 1b. same with a natural trine forecast (early game, no 継ぎ留め/拍子木): the trine no longer skips the choice
+    const a2 = fightRun(SD, ['nudge', 'respin', 'borrow'], 'sentry', 6, { sparks: 0 });
+    a2.fight.freeRespinUsed = true;
+    a2.spin(); setPayline(a2, ['heart', 'heart', 'heart']);
+    a2.hp = 30;
+    const a2stop = a2.borrowWorthwhile();
+    eq(a2.shouldAutoResolve(), !a2stop, '1b. a combo at 0 sparks waits exactly when a borrowed spark would change the turn');
+    // 2. borrow already used: no needless stop
+    const b = fightRun(SD, ['nudge', 'respin', 'borrow'], 'sentry', 6, { sparks: 0 });
+    b.fight.freeRespinUsed = true; b.fight.borrowUsed = true;
+    b.spin(); setPayline(b, ['ward', 'blade', 'flame']);
+    ok(!b.canBorrow() && b.shouldAutoResolve(), '2. 0 sparks, borrow already used: resolves at once');
+    // 3. 0 sparks, borrowing would change nothing material: no needless stop
+    const c3 = fightRun(SD, ['nudge', 'respin', 'borrow'], 'moth', 6, { sparks: 0 });
+    c3.fight.freeRespinUsed = true;
+    c3.enemy.cursor = 0; c3.enemy.intent = c3._readCell(c3.enemy); c3.enemy.now = null; // hex: no attack this turn
+    c3.spin();
+    c3.reels.forEach((r) => { r.strip = r.strip.map((x) => Object.assign({}, x, { s: 'lantern', g: false })); r.pos = 0; });
+    ok(!c3.borrowWorthwhile() && c3.shouldAutoResolve(), '3. 0 sparks, nothing a borrowed spark could change: resolves at once');
+    // 4. a send (even with the last spark) leaves the turn open; the player confirms
+    const d = fightRun(SD, ['nudge', 'respin', 'hyoshigi', 'borrow', 'stasis'], 'sentry', 6, { sparks: 1 });
+    d.fight.freeRespinUsed = true; d.fight.freeNudgeLeft = 0;
+    d.spin(); setPayline(d, ['blade', 'heart', 'ward']);
+    d.advance();
+    ok(d.sparks === 0 && !d.shouldAutoResolve(), '4. last spark spent on 台本送り: the turn waits for 発動');
+    const d2 = fightRun(SD, ['nudge', 'respin', 'hyoshigi', 'stasis'], 'sentry', 6, { sparks: 2 });
+    d2.fight.freeRespinUsed = true; d2.fight.freeNudgeLeft = 0;
+    d2.spin(); setPayline(d2, ['blade', 'heart', 'ward']); d2.toggleHold(0); d2.toggleHold(1); d2.reels[2].jam = true;
+    d2.advance();
+    ok(!d2.shouldAutoResolve(), '4b. send with every reel held/jammed: still waits (holds can be released, then 発動)');
+    d2.toggleHold(1);
+    ok(d2.canNudge(1, 1), '4c. after the send the player can still release a hold and nudge');
+    // 5. borrow, kill the enemy: nothing reaches the next fight
+    const k5 = fightRun(SD, ['nudge', 'respin', 'borrow'], 'moth', 6, { sparks: 0 });
+    k5.enemy.hp = 4;
+    k5.spin(); setPayline(k5, ['blade', 'heart', 'ward']); k5.borrow();
+    const ev5 = k5.resolve();
+    ok(ev5.some((x) => x.t === 'enemyDie') && !k5.debtCarry, '5. borrow + kill: the debt ends with the fight');
+    k5.phase = 'start'; k5.floor = 7;
+    const ev5b = k5._startCombat('sentry', {});
+    ok(!ev5b.some((x) => x.t === 'debtCarried') && !k5.fight.debt && !k5.fight.borrowed && !k5.fight.borrowUsed, '5b. the next fight starts clean (no debt, can borrow again)');
+    eq(k5.scriptBand().cells.map((x) => x.role), ['now', 'next', 'next2'], '5c. its band shows no debt cell');
+    // 6. borrow, the fight goes on: the debt is collected this enemy turn, once
+    const g6 = fightRun(SD, ['nudge', 'respin', 'borrow'], 'sentry', 6, { sparks: 0 });
+    g6.spin(); setPayline(g6, ['blade', 'heart', 'ward']); g6.borrow();
+    const ev6 = g6.resolve();
+    eq([ev6.filter((x) => x.t === 'debtAction').length, g6.enemy.cursor, g6.enemy.turn], [1, 2, 1], '6. debt collected once in the same fight (2 cells, 1 turn)');
+    // 8. abbot: every step of its script, sent = shown
+    for (let step = 0; step < 6; step++) {
+      const ab = fightRun(SD, ['nudge', 'respin', 'hyoshigi'], 'abbot', 8, { sparks: 3 });
+      ab.enemy.cursor = step; ab.enemy.intent = ab._readCell(ab.enemy); ab.enemy.now = ab.enemy.intent.now || null;
+      ab.spin();
+      const P = ab.previewAdvance();
+      ab.advance();
+      eq(strip(ab.enemy.intent), strip(P.intent), `8. abbot step ${step}: send preview == the intent that is now`);
+      const B = ab.scriptBand(), nx = B.cells.find((x) => x.role === 'next');
+      ab.resolve();
+      if (ab.enemy && !nx.cond && !nx.unknown) eq(strip(ab.enemy.intent), strip(nx.it), `8. abbot step ${step}: band next == next intent after the send`);
+    }
+    // 10. the last seal breaks this turn: band next is flagged as the next act; a send gives the current act's next cell
+    const bs = fightRun(SD, ['nudge', 'respin', 'hyoshigi'], 'ashlord', 12, { sparks: 3 });
+    { const e = bs.enemy; e.seals = 1; e.turn = 4; e.cursor = 6; e.hp = 150; e.intent = bs._readCell(e); e.now = e.intent.now || null; }
+    bs.spin(); setPayline(bs, ['flame', 'flame', 'flame']);
+    const B10 = bs.scriptBand(), n10 = B10.cells.find((x) => x.role === 'next');
+    const P10 = bs.previewAdvance();
+    ok(n10.actChange === 3 && !n10.cond, '10. band next is an exact cell of act 3, flagged 幕');
+    ok(P10.intent.k === 'attack' && !(P10.intent.now) && strip(P10.intent) !== strip(n10.it), '10b. sending gives the sealed act\'s next cell, not the 幕 cell');
+    const bsc = bs._clone(); bsc.resolve();
+    eq(strip(bsc.enemy.intent), strip(n10.it), '10c. resolving without a send: the 幕 cell is exactly what comes');
+    bs.advance();
+    eq(strip(bs.enemy.intent), strip(P10.intent), '10d. the send result == its preview');
+    // 12. combo pause setting
+    const cp = (ids, settings) => { const r = fightRun(SD, ids, 'sentry', 6, { sparks: 2, profile: (p) => Object.assign(p.settings, settings || {}) }); r.spin(); setPayline(r, ['flame', 'flame', 'flame']); return r; };
+    ok(cp(['nudge', 'respin']).shouldAutoResolve(), '12. "止まる" before 継ぎ留め/拍子木: a trine fires (setting not active yet)');
+    ok(!cp(['nudge', 'respin', 'stasis']).shouldAutoResolve(), '12b. with 継ぎ留め: the trine waits');
+    ok(cp(['nudge', 'respin', 'stasis'], { comboPause: 'off' }).shouldAutoResolve(), '12c. setting "常にすぐ発動": the trine fires');
+    const cpk = cp(['nudge', 'respin', 'stasis']); cpk.enemy.hp = 5;
+    ok(cpk.shouldAutoResolve(), '12d. a killing trine always fires');
+    // 13. a profile saved mid-fight carries no battle state
+    const store = {};
+    const fakeLS = { getItem: (k2) => (k2 in store ? store[k2] : null), setItem: (k2, v) => { store[k2] = String(v); }, removeItem: (k2) => { delete store[k2]; } };
+    const S2 = currentSD({ localStorage: fakeLS });
+    const prof = S2.Meta.newProfile(); prof.unlocked.nudge = true; prof.unlocked.borrow = true; prof.unlocked.hyoshigi = true;
+    const live = new S2.Run(S2.Meta.computeMods(prof), { seed: 5, startFloor: 6 }); live.floor = 6; live.phase = 'start'; live._startCombat('sentry', {});
+    live.sparks = 0; live.spin(); live.borrow();
+    S2.Meta.save(prof);
+    const raw = store[S2.Meta.SAVE_KEY];
+    ok(raw && !/borrow(ed|Used)|"debt"|cursor/.test(raw), '13. the saved profile holds no borrow/debt/script battle state');
+    const re = S2.Meta.load();
+    const fresh = new S2.Run(S2.Meta.computeMods(re), { seed: 5, startFloor: 6 }); fresh.floor = 6; fresh.phase = 'start'; fresh._startCombat('sentry', {});
+    ok(!fresh.fight.debt && !fresh.fight.borrowed && !fresh.fight.borrowUsed && fresh.enemy.cursor === 0, '13b. after load a new fight starts clean');
   }
 
   section('save / load: old saves load, new fields default safely');

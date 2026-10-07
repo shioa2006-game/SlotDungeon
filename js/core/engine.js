@@ -510,8 +510,6 @@
       if (this.fight.momentum) this._gainSparks(1);
       if (this.hasRelic('buckler')) this.block += 2;
       if (this.hasRelic('hourglass')) this._gainSparks(1);
-      // 借り火 owed from a fight that ended first: this enemy collects it on its first turn
-      if (this.debtCarry) { this.debtCarry = false; this.fight.debt = true; this.fight.debtCarried = true; ev.push({ t: 'debtCarried' }); }
       this._newIntent();
       this.phase = 'idle';
       ev.unshift({ t: 'combat', enemy: this._enemySnap(), intent: e.intent, block: this.block, sparks: this.sparks, momentum: this.fight.momentum, hp: this.hp, maxHp: this.maxHp });
@@ -658,11 +656,18 @@
     shouldAutoResolve() {
       if (this.phase !== 'spun') return false;
       if (this.awaken.ready) return false;
+      // 拍子木 changed what the enemy does this turn: the player reads the new board and confirms (no instant resolve)
+      if (this.fight && this.fight.advanced) return false;
       if (!this.needsDecision()) return true;
       const R = this.forecast();
       const e = this.enemy;
       if (e && R.totalDmg >= e.hp + e.block && !(e.now && e.now.k === 'reflect')) return true;
-      if (R.combos.some((c) => COMBO_KINDS[c.k] && c.k !== 'reaper')) return !this.mods.comboPause;
+      if (R.combos.some((c) => COMBO_KINDS[c.k] && c.k !== 'reaper')) {
+        if (this.mods.comboPause) return false;
+        // early game: a combo fires at once — unless the only thing left is a borrowed spark that would change the turn
+        // (借り火: at 0 sparks the choice "borrow or accept" must not be skipped)
+        return this._anyAction(false) || !this.canBorrow();
+      }
       return false;
     }
     // Why the turn stopped on a combo (for the UI): null when it would not have stopped.
@@ -858,47 +863,59 @@
       this.stats.borrows += 1;
       return [{ t: 'borrow', borrowed: f.borrowed, sparks: this.sparks }];
     }
-    // Would a borrowed spark change anything worth stopping for? (used to decide whether a 0-spark turn pauses)
+    // Would a borrowed spark materially change this turn? (decides whether a 0-spark turn waits for the player)
+    // Every one-spark action (nudge — after releasing a hold if needed —, 写し身, 運命の鍵, 台本送り) is tried on a copy of
+    // the run holding the borrowed spark but NOT the debt: the question is whether borrowing is a real choice; the
+    // player weighs its price on the band. It counts when the action completes a trine/bond, wins the fight, avoids the
+    // party's death, keeps ≥5 more HP, deals ≥8 more damage, or lifts the forecast utility by ≥7.
+    // Dice are never consulted: respins and cells drawn from the dice do not count.
     borrowWorthwhile() {
       if (!this.canBorrow()) return false;
-      const base = this.forecast().utility;
-      const GAIN = 7;
+      const base = this._borrowOutcome(null);
+      if (!base) return false;
+      const tries = [];
       if (this.mods.nudge) {
-        const cur = this.paylineCells();
         for (let i = 0; i < this.reels.length; i++) {
-          const r = this.reels[i];
-          if (r.held || r.jam) continue;
+          if (this.reels[i].jam) continue;
           for (let d = 1; d <= this.mods.nudgeRange; d++) for (const dir of [-d, d]) {
-            const cells = cur.slice(); cells[i] = this.cellAt(i, dir);
-            if (this.evaluate(cells).utility - base >= GAIN) return true;
+            tries.push((c) => { if (c.reels[i].held) c.toggleHold(i); return c.nudge(i, dir); });
           }
         }
       }
       if (this.mods.echo && this.fight.echoLeft > 0) {
-        const cur = this.paylineCells();
-        for (let a = 0; a < cur.length; a++) for (let b = 0; b < cur.length; b++) {
-          if (a === b || this.reels[b].jam || cur[a].s === cur[b].s) continue;
-          const cells = cur.slice(); cells[b] = cur[a];
-          if (this.evaluate(cells).utility - base >= GAIN) return true;
-        }
+        for (let a = 0; a < this.reels.length; a++) for (let b = 0; b < this.reels.length; b++) if (a !== b) tries.push((c) => c.echo(a, b));
       }
+      if (this.mods.script) tries.push((c) => { const ev = c.advance(); return ev.length && !c.enemy.intent.random ? ev : []; });
       if (this.mods.fateKey && this.fight.keyLeft > 0) {
-        const cur = this.paylineCells();
         for (let i = 0; i < this.reels.length; i++) {
-          const r = this.reels[i];
-          if (r.jam) continue;
-          for (const c of r.strip) { const cells = cur.slice(); cells[i] = c; if (this.evaluate(cells).utility - base >= GAIN) return true; }
+          if (this.reels[i].jam) continue;
+          for (let ci = 0; ci < this.reels[i].strip.length; ci++) if (ci !== this.reels[i].pos) tries.push((c) => c.fateKey(i, ci));
         }
       }
-      if (this.mods.script) {
-        const u = this._sim((c) => {
-          c.fight.borrowed = 1;
-          if (!c.canAdvance()) return null;
-          c.advance();
-          return c.enemy.intent.random ? null : c.forecast().utility; // a dice-drawn cell is not known in advance
-        });
-        if (u != null && u - base >= GAIN) return true;
-      }
+      for (const act of tries) if (Run._material(base, this._borrowOutcome(act))) return true;
+      return false;
+    }
+    // The outcome of this turn on a copy holding a borrowed spark (no debt), after `act` (or as it stands).
+    _borrowOutcome(act) {
+      return this._sim((c) => {
+        c.fight.borrowed = 1;
+        if (act) { const ev = act(c); if (!ev || !ev.length || c.phase !== 'spun') return null; }
+        const R = c.forecast(), P = c.previewTurn();
+        if (!P) return null;
+        const combo = R.combos.some((x) => COMBO_KINDS[x.k] && x.k !== 'reaper');
+        return { combo, util: R.utility, kills: P.enemyDies, dies: P.partyDies || P.secondWind, hp: P.hpAfter,
+          enemyHp: P.enemyDies ? 0 : P.enemyAfter ? P.enemyAfter.hp : c.enemy.hp, random: P.random };
+      });
+    }
+    static _material(base, alt) {
+      if (!alt) return false;
+      if (alt.combo && !base.combo) return true;
+      if (alt.kills && !base.kills) return true;
+      if (base.dies && !alt.dies) return true;
+      if (alt.util - base.util >= 7) return true;
+      if (alt.random || base.random) return false; // a 連鎖 bonus spin is not peeked: HP / damage are not compared
+      if (!alt.dies && alt.hp - base.hp >= 5) return true;
+      if (base.enemyHp - alt.enemyHp >= 8) return true;
       return false;
     }
 
@@ -1307,11 +1324,11 @@
       }
       // 借り火: the Ashwheel collects its debt — it plays its next script cell now as well
       if (f.debt) {
-        f.debt = false; f.debtCarried = false;
+        f.debt = false;
         this._checkBossPhase(ev);
         const d = this._nextCell(e);
         const hp0 = this.hp;
-        ev.push({ t: 'debtAction', intent: d });
+        ev.push({ t: 'debtAction', intent: d, phase: e.phase });
         ev.push(...this._executeIntent(d));
         Run.scriptTick(e, d);
         this.stats.debtTaken += Math.max(0, hp0 - this.hp);
@@ -1472,6 +1489,11 @@
         if (P.debt && P.debt.random) { P.dice = true; P.random = true; } // the debt cell came from the dice: damage / outcome are not knowable
         P.fightGoesOn = !P.enemyDies && !P.partyDies && !!c.enemy && c.phase === 'idle';
         if (P.fightGoesOn) { P.next = c.enemy.intent; P.enemyAfter = c._ghostOf(c.enemy); }
+        // the boss's act after this turn (a seal break / HP 30% rewrites the script: such cells are not reachable by 台本送り)
+        P.phaseBefore = this.enemy.phase;
+        P.phaseAfter = c.enemy ? c.enemy.phase : null;
+        const dA = ev.find((x) => x.t === 'debtAction');
+        P.debtPhase = dA ? dA.phase : null;
         return P;
       });
     }
@@ -1556,13 +1578,17 @@
         this._ghostPlay(g, nx); g.turn += 1;
         const n2 = P.dice ? Object.assign({}, UNKNOWN_CELL) : this._ghostNext(g);
         add('next2', n2, g, cond2);
+        // this resolve changes the boss's act: the cells after it belong to the new script (exact, but 台本送り cannot reach them)
+        if (e.boss) for (const c of cells) {
+          if ((c.role === 'next' || c.role === 'next2') && P.phaseAfter != null && P.phaseAfter !== P.phaseBefore) c.actChange = P.phaseAfter;
+          if (c.role === 'debt' && P.debtPhase != null && P.debtPhase !== P.phaseBefore) c.actChange = P.debtPhase;
+        }
         return { cells, spun: true, outcome: P };
       }
       const g = this._ghostOf(e);
       const stag1 = e.intent.k === 'charge' ? 'stagger' : null; // two wards on the coming spin strike the heavy out
       const c1 = this._bossCond(g, 1) || stag1, c2 = this._bossCond(g, 2) || (stag1 ? 'shift' : null);
       this._ghostPlay(g, e.intent);
-      if (this.fight && this.fight.debt) { const d = this._ghostNext(g); add('debt', d, g, this._bossCond(g, 1)); this._ghostPlay(g, d); }
       g.turn += 1;
       const n1 = this._ghostNext(g);
       add('next', n1, g, c1);
@@ -1599,7 +1625,6 @@
       const d = this._gainSparks(m.sparkPerWin);
       if (d > 0) ev.push({ t: 'sparks', delta: d, total: this.sparks, max: this.maxSparks, src: 'win' });
       const wasMimic = e.id === 'mimic';
-      if (this.fight && this.fight.debt) this.debtCarry = true;
       this.enemy = null;
       this.fight = null;
       if (!wasMimic) this.pending.unshift(e.elite || e.dread ? 'relic' : 'carving');

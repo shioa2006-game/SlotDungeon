@@ -110,6 +110,18 @@ for (let n = 0; n < N; n++) {
         ev = run.spin(); actions.spin = (actions.spin || 0) + 1;
       } else if (run.phase === 'spun') {
         if (R.chance(0.25)) purity(run);
+        // 星 / hints: the quick judgement and every nudge hint agree with what the resolve makes (2026-10-09)
+        if (R.chance(0.3)) {
+          const great = (F) => F.combos.some((c) => c.k !== 'reaper');
+          if (run._isGreat(run.paylineCells()) !== great(run.forecast())) fail('_isGreat disagrees with the resolve', run);
+          if (!great(run.forecast())) for (const nm of run.nearMisses(1)) {
+            // the line the hint points at (also shown to players without 押し手 as 惜しい！) must really be a combo
+            const cells = run.paylineCells(); cells[nm.reel] = run.cellAt(nm.reel, nm.dir);
+            const okNm = great(run.evaluate(cells));
+            if (!okNm) fail('a nudge hint promised a combo that does not come', run);
+          }
+          count('hint-check');
+        }
         // E: an auto-resolving 0-spark turn must not hide a borrowed action that would keep the party alive
         if (R.chance(0.3) && run.sparks === 0 && run.canBorrow() && run.shouldAutoResolve()) {
           const dies = run.previewTurn();
@@ -202,7 +214,8 @@ for (let n = 0; n < N; n++) {
             if (!sameIntent(nextCell.it, run.enemy.intent)) fail('band "next" != the intent that came', run, JSON.stringify([nextCell.it, run.enemy.intent]));
             count('band-next');
           }
-          if (debtCell && !debtCell.unknown) {
+          // (a debt cell flagged by the band — e.g. 連鎖: 返し鏡's seal then comes from the bonus line — is not a promise)
+          if (debtCell && !debtCell.unknown && !debtCell.cond) {
             const d = ev.find((x) => x.t === 'debtAction');
             if (d && !sameIntent(debtCell.it, d.intent)) fail('band debt cell != the debt action', run);
             if (d) count('band-debt');

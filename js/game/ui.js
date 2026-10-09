@@ -117,15 +117,13 @@
     const p = (arr, s) => arr.filter((x) => x === s || x === 'wild').length / arr.length;
     const focus = o.kind === 'transmute' ? o.to : o.sym;
     if (!focus || focus === 'wild') return null;
-    const trine = (ss, s) => ss.reduce((acc, arr) => acc * p(arr, s), 1);
-    const anyTrine = (ss) => ['blade', 'flame', 'ward', 'heart', 'lantern'].reduce((acc, s) => acc + trine(ss, s), 0);
-    const B = SD.Data.BOND_ORDER;
-    const bond = (ss) => (run.mods.bond ? p(ss[0], B[0]) * p(ss[1], B[1]) * p(ss[2], B[2]) : null);
+    // 三連 / 絆 odds: exact, judged as the resolve judges (a wild completes a combo whenever it can): Run.comboOdds()
+    const odds = (ss) => run.comboOdds(ss.map((arr) => arr.map((s) => ({ s }))));
+    const ob = odds(strips), oa = odds(after);
     return {
-      anyBefore: anyTrine(strips), anyAfter: anyTrine(after), bondBefore: bond(strips), bondAfter: bond(after),
+      anyBefore: ob.trine, anyAfter: oa.trine, bondBefore: run.mods.bond ? ob.bond : null, bondAfter: run.mods.bond ? oa.bond : null,
       sym: focus,
-      before: p(strips[o.reel], focus), after: p(after[o.reel], focus),
-      trineBefore: trine(strips, focus), trineAfter: trine(after, focus),
+      before: p(strips[o.reel], focus), after: p(after[o.reel], focus), // this reel shows the symbol (or a 星)
     };
   };
 

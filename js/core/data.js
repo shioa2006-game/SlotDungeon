@@ -10,7 +10,7 @@
     heart:   { id: 'heart',   name: '癒',   hero: 'priest', base: 3, color: '#7df0b4', desc: 'HPを回復' },
     lantern: { id: 'lantern', name: '灯',   hero: null,     base: 2, color: '#ffd257', desc: '残り火を得る。火種+1（1ターン1回）' },
     skull:   { id: 'skull',   name: '髑髏', hero: null,     base: 3, color: '#b48cff', desc: '自分に3ダメージ。三つ揃うと「死神」' },
-    wild:    { id: 'wild',    name: '星',   hero: null,     base: 0, color: '#fff6d8', desc: '結果が最も良くなる記号に化ける' },
+    wild:    { id: 'wild',    name: '星',   hero: null,     base: 0, color: '#fff6d8', desc: '三連か絆を作れるなら必ず作る。作れないときは、結果が最も良くなる記号に化ける' },
   };
   const WILD_PRIORITY = ['blade', 'flame', 'ward', 'heart', 'lantern'];
   const BOND_ORDER = ['heart', 'flame', 'blade']; // reel 1 = Toto, reel 2 = Lu, reel 3 = Bram (matches the stage line-up)
@@ -310,7 +310,7 @@
       desc: '発動しても、最後に留めた1本は次のターンまで留まったままになる（1ターン限り）。',
       next: '次のターンの目を、今から組み立てられる。' },
     { id: 'wild', branch: 'weave', name: '星の欠片', glyph: '星', cost: 80, req: ['sparkjar'], a: -80, r: 3, kind: 'prob',
-      desc: 'リール2に【星】を1つ彫った状態で始まる。星は結果が最も良くなる記号に化ける。刻印にも星が現れる。',
+      desc: 'リール2に【星】を1つ彫った状態で始まる。星は三連か絆を作れるなら必ず作り、作れないときは結果が最も良くなる記号に化ける。刻印にも星が現れる。',
       next: 'どの記号にもなれる星が回り始める。' },
     { id: 'chisel', branch: 'weave', name: '鑿', glyph: '鑿', cost: 70, req: ['sparkjar'], a: -58, r: 3, kind: 'prob',
       desc: 'Run開始時、好きなコマを2つ削れる。焚き火でも削れる。',

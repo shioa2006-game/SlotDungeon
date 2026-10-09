@@ -66,6 +66,12 @@
   // Shortcut starts (free milestones): what you receive instead of the skipped floors.
   const SHORTCUTS = {
     5: { gate: 'bellhound', carvings: 3, relics: 1, embers: 25, label: '第二層から' },
+    // after the first clear (docs/EXPANSION_3A2_ENTRY_SPEC.md). The kit (carvings / relics) is spent inside the run only;
+    // B9's 50 embers are paid only when that run beats 灰輪の主 (bossEmbers), never for just setting out.
+    9: { gate: 'ashlord', carvings: 4, relics: 4, embers: 0, bossEmbers: 50, label: '第三層から', postClear: true },
+    // 灰の底 only (no boss, no main-game record): opens once a 灰の底 run has been finished
+    // kit tuned by sim (tools/sim.js entry): with 4 relics 灰の底 clears match the B9 route (+1 pt overall, every build within ±15)
+    13: { gateStat: ['deepRuns', 1], carvings: 4, relics: 4, embers: 0, label: '灰の底から', postClear: true, deepOnly: true },
   };
 
   // ---------------------------------------------------------------- enemies

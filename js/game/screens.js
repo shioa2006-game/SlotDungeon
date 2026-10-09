@@ -116,7 +116,7 @@ const TREE_SX = 1.12;
         <div class="rec"><span>前回</span><b>B${s.lastFloor || 0}</b></div>
         <div class="rec"><span>三連</span><b>${s.triples}</b></div>
         <div class="rec"><span>ボス最高</span><b>${s.bossKills ? '討伐 ' + s.bossKills + '回' : best}</b></div>` +
-        (s.deepRuns ? `<div class="rec"><span>灰の底</span><b>最深 B${s.deepBest}${s.deepClears ? '・踏破 ' + s.deepClears + '回' : ''}</b></div>` : '');
+        (s.deepRuns ? `<div class="rec"><span>灰の底</span><b>最深 B${s.deepBest}</b></div><div class="rec"><span>踏破／挑戦</span><b>${s.deepClears || 0} / ${s.deepRuns}</b></div>` : '');
       const recN = SD.Meta.recommendedNode(p, p.seen.lastWhisper);
       if (recN) {
         const g = recN;
@@ -135,9 +135,19 @@ const TREE_SX = 1.12;
       const verb = fresh.filter((n) => n.kind === 'verb' || n.kind === 'rule').pop();
       const b1 = U.button(verb ? `降下する <small>【${verb.name}】を試す・B1から</small>` : '降下する <small>B1から</small>', 'primary big', () => G.setScreen(new RunScreen({ startFloor: 1 })));
       this.desc.appendChild(b1);
+      const post = mods.shortcuts.some((f) => SD.Data.SHORTCUTS[f].postClear);
       if (mods.shortcuts.indexOf(5) >= 0) {
-        const b5 = U.button(`第二層から <small>B5・刻印3+遺物${mods.abbotBonus ? 2 : 1}</small>`, 'secondary', () => G.setScreen(new RunScreen({ startFloor: 5 })));
+        // before the clear: exactly as it always was; after it: one compact row of shortcuts
+        const b5 = U.button(`第二層から <small>B5・刻印3+遺物${mods.abbotBonus ? 2 : 1}</small>`, post ? 'secondary sc' : 'secondary', () => G.setScreen(new RunScreen({ startFloor: 5 })));
         this.desc.appendChild(b5);
+      }
+      if (mods.shortcuts.indexOf(9) >= 0) {
+        const S = SD.Data.SHORTCUTS[9];
+        this.desc.appendChild(U.button(`第三層から <small>B9・刻印${S.carvings}+遺物${S.relics}・ボス撃破で残り火+${S.bossEmbers}</small>`, 'secondary sc', () => G.setScreen(new RunScreen({ startFloor: 9 }))));
+      }
+      if (mods.shortcuts.indexOf(13) >= 0) {
+        const S = SD.Data.SHORTCUTS[13];
+        this.desc.appendChild(U.button(`灰の底から <small>B13・刻印${S.carvings}+遺物${S.relics}・本編の記録は付かない</small>`, 'secondary sc deep', () => G.setScreen(new RunScreen({ startFloor: 13 }))));
       }
     }
 
@@ -1273,7 +1283,8 @@ const TREE_SX = 1.12;
       const prevBestVs = (p.stats.bestVs || {})[summary.killer ? summary.killer.id : ''];
       // a settled win was applied at the boss: 帰還 adds nothing, a descent adds only what it gained
       let res;
-      if (!settled) res = SD.Meta.applyRunResult(p, summary);
+      if (summary.deepOnly) res = SD.Meta.applyDeepResult(p, summary); // 灰の底から: the main-game record is untouched
+      else if (!settled) res = SD.Meta.applyRunResult(p, summary);
       else if (summary.deep) res = Object.assign({}, this.settledRes || {}, SD.Meta.applyDeepResult(p, summary));
       else res = this.settledRes || {};
       G.save();
@@ -1338,7 +1349,18 @@ const TREE_SX = 1.12;
       const topEl = document.querySelector('.run-top'); if (topEl) topEl.style.display = 'none'; if (this.dom.goal) this.dom.goal.style.display = 'none';
       if (this.dom.relics) this.dom.relics.style.display = 'none';
       const box = U.el('div', 'end-box');
-      if (summary.won) {
+      if (summary.deepOnly) {
+        // 灰の底から: its own result (not a main-game win or death)
+        const d = summary.deep;
+        box.appendChild(U.el('div', 'end-title' + (d.cleared ? ' win' : ''), d.cleared ? '灰の底を越えた' : `灰の底 B${d.floor} で力尽きた`));
+        box.appendChild(U.el('div', 'end-sub', d.cleared ? '深淵の修道院長を討った。（灰の底からの挑戦・本編の記録には付かない）' : '灰の底からの挑戦。本編の記録には付かない。'));
+        const k = summary.killer;
+        if (k && !d.cleared) {
+          const kb = U.el('div', 'killer');
+          kb.innerHTML = `<div class="k-name">${k.name}</div><div class="k-bar"><div class="k-fill" style="width:${Math.round(k.hpPct * 100)}%"></div></div><div class="k-left">残り <b>${k.hp}</b> / ${k.maxHp}</div>`;
+          box.appendChild(kb);
+        }
+      } else if (summary.won) {
         box.appendChild(U.el('div', 'end-title win', '灰輪の主を討った'));
         box.appendChild(U.el('div', 'end-sub', '灯輪は再び正しく廻り始めた。けれど深淵の灯は、まだ呼んでいる。'));
         const st = p.stats;
@@ -1352,7 +1374,7 @@ const TREE_SX = 1.12;
         box.appendChild(grid);
         if (summary.deep) box.appendChild(U.el('div', 'win-note deep', summary.deep.cleared ? '<b>灰の底を越えた。</b>深淵の修道院長を討った。' : `<b>灰の底 B${summary.deep.floor} で力尽きた。</b>灰輪の主を討った勝利は、そのまま残る。`));
         else if (st.bossKills <= 1) box.appendChild(U.el('div', 'win-note', '最初は祈るだけだった灯輪を、三人はいま自分の手で廻している。<br>灯紋はまだ残っている――別の道で、もう一度深淵へ。'));
-        if (!summary.settled && st.wins === 1) box.appendChild(U.el('div', 'win-note deep', '<b>灰の底が開いた。</b>次の挑戦から、灰輪の主を倒した先へ降りられる。'));
+        if (!summary.settled && st.wins === 1) box.appendChild(U.el('div', 'win-note deep', '<b>灰の底が開いた。</b>次の挑戦から、灰輪の主を倒した先へ降りられる。<br>近道「第三層から（B9）」も開いた。'));
       } else {
         box.appendChild(U.el('div', 'end-title', `B${Math.max(summary.floor, summary.startFloor || 1)} で灯が消えた`));
         const k = summary.killer;
@@ -1366,8 +1388,10 @@ const TREE_SX = 1.12;
         }
       }
       const rec = U.el('div', 'records');
-      if (res.newBestFloor) rec.appendChild(U.el('span', 'chip new', `最深記録 B${summary.floor}`));
+      if (summary.deepOnly) { /* 灰の底 only: no main-game depth chip */ }
+      else if (res.newBestFloor) rec.appendChild(U.el('span', 'chip new', `最深記録 B${summary.floor}`));
       else rec.appendChild(U.el('span', 'chip', `最深 B${p.stats.bestFloor}`));
+      if (res.firstDeepRun) rec.appendChild(U.el('span', 'chip new', '近道「灰の底から」が開いた'));
       if (res.newBossRecord) rec.appendChild(U.el('span', 'chip new', 'ボス最高記録'));
       if (res.firstHound) rec.appendChild(U.el('span', 'chip new', '第二層への近道が開いた'));
       if (res.firstAbbot) rec.appendChild(U.el('span', 'chip new', '近道で選べる遺物 +1'));
@@ -1415,16 +1439,25 @@ const TREE_SX = 1.12;
         btns.appendChild(pb);
         this.endPrimary = pb;
       } else this.endPrimary = camp;
+      // 灰の底 result: retry 灰の底 at once — a brand-new run (nothing carried over), the B13 kit is chosen again
+      if (summary.deep && SD.Meta.computeMods(p).shortcuts.indexOf(13) >= 0) {
+        const dr = U.button('灰の底から再挑戦 <small>B13・新しい支度から</small>', primaryAction ? 'secondary' : 'primary big', () => G.setScreen(new RunScreen({ startFloor: 13 })), { silent: true });
+        if (!primaryAction) { btns.insertBefore(dr, btns.firstChild); this.endPrimary = dr; camp.className = camp.className.replace('primary big', 'secondary'); } else btns.appendChild(dr);
+      }
       btns.appendChild(camp);
-      if (!summary.won) btns.appendChild(U.button('すぐ再挑戦', 'mini', () => G.setScreen(new RunScreen({ startFloor: this.defaultStart() }))));
+      if (!summary.won && !summary.deepOnly) btns.appendChild(U.button('すぐ再挑戦', 'mini', () => G.setScreen(new RunScreen({ startFloor: this.defaultStart() }))));
       box.appendChild(btns);
       m.appendChild(box);
       this.endInputLock = performance.now() + 1000;
     }
 
+    // Retry: a run started at 第三層から / 灰の底から starts there again; otherwise the deepest pre-clear shortcut (as before).
     defaultStart() {
       const mods = SD.Meta.computeMods(this.profile);
-      return mods.shortcuts.length ? Math.max(...mods.shortcuts) : 1;
+      const sf = this.run && this.run.startFloor, sc = SD.Data.SHORTCUTS[sf];
+      if (sc && sc.postClear && mods.shortcuts.indexOf(sf) >= 0) return sf;
+      const pre = mods.shortcuts.filter((f) => !SD.Data.SHORTCUTS[f].postClear);
+      return pre.length ? Math.max(...pre) : 1;
     }
 
     // ------------------------------------------------------------------ input

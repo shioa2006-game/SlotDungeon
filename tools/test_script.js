@@ -596,6 +596,91 @@ function unit() {
     eq([p3.stats.runs, p3.stats.wins, p3.stats.deaths, p3.stats.deepRuns, p3.stats.deepClears, p3.embers], [1, 2, 0, 1, 0, f.embers], 'fallen: no death, no clear; embers once');
   }
 
+  section('灰の底への入り口 (stage 3a+): 第三層から / 灰の底から');
+  {
+    const ids = ['nudge', 'respin'];
+    const cleared = (extra) => (p) => { p.stats.eliteKills = { bellhound: 1, ashlord: 1 }; p.stats.wins = 1; if (extra) extra(p); };
+    // when the shortcuts open
+    eq(SD.Meta.computeMods(profileWith(SD, ids, (p) => { p.stats.eliteKills.bellhound = 1; })).shortcuts, [5], 'before the clear: only 第二層から');
+    eq(SD.Meta.computeMods(profileWith(SD, ids, cleared())).shortcuts, [5, 9], 'after the clear: 第三層から opens');
+    eq(SD.Meta.computeMods(profileWith(SD, ids, cleared((p) => { p.stats.deepRuns = 1; }))).shortcuts, [5, 9, 13], 'after one 灰の底 run: 灰の底から opens');
+    // the kits (spent inside the run, nothing owned at the start)
+    const kitOf = (floor) => {
+      const r = new SD.Run(SD.Meta.computeMods(profileWith(SD, ids, cleared())), { seed: 3, startFloor: floor });
+      r.begin();
+      const all = [r.offerKind].concat(r.pending);
+      return [all.filter((k) => k === 'carving').length, all.filter((k) => k === 'relic').length, r.relics.length];
+    };
+    eq(kitOf(9), [4, 4, 0], 'B9 kit: 4 carvings + 4 relics');
+    eq(kitOf(13), [4, 4, 0], 'B13 kit: 4 carvings + 4 relics, a fresh run (no relic owned)');
+    const killNow = (r) => {
+      const e = r.enemy; e.hp = 1; e.block = 0; e.seals = 0;
+      r.spin();
+      const mk = e.now && e.now.k === 'mark' ? e.now.sym : null;
+      const sym = mk === 'blade' ? 'flame' : 'blade';
+      setPayline(r, [sym, sym, sym]);
+      return r.resolve();
+    };
+    const toFight = (r) => { let g = 0; while (r.phase !== 'idle' && r.phase !== 'dead' && r.phase !== 'won' && g++ < 30) {
+      if (r.phase === 'crossroads') { const bi = r.doors.findIndex((d) => d.kind === 'battle' || d.kind === 'elite' || d.kind === 'continue'); r.choose(null, bi >= 0 ? bi : 0); }
+      else if (r.phase === 'event') r.chooseEvent(r.event.options[r.event.options.length - 1].id);
+      else if (r.phase === 'chisel') r.finishChisel();
+      else break;
+    } };
+    // B9: setting out earns nothing; the 50 comes only with the boss
+    const g0 = new SD.Run(SD.Meta.computeMods(profileWith(SD, ids, cleared())), { seed: 4, startFloor: 9 });
+    g0.begin(); g0._die(null);
+    eq(g0.summary.embers, 0, 'B9: set out and give up at once -> 0 embers');
+    const g1 = new SD.Run(SD.Meta.computeMods(profileWith(SD, ids, cleared())), { seed: 4, startFloor: 9 });
+    g1.begin(); toFight(g1);
+    ok(g1.phase === 'idle' && g1.floor === 9, '(setup) B9 first fight');
+    g1._die(g1.enemy);
+    eq(g1.summary.embers, 0, 'B9: give up in the first fight -> 0 embers (no depth for the starting floor)');
+    const g2 = new SD.Run(SD.Meta.computeMods(profileWith(SD, ids, cleared())), { seed: 4, startFloor: 9 });
+    g2.begin(); toFight(g2); killNow(g2);
+    eq(g2.emberLog.shortcut || 0, 0, 'B9: the first kill pays no shortcut embers');
+    const b = new SD.Run(SD.Meta.computeMods(profileWith(SD, ids, cleared())), { seed: 5, startFloor: 9 });
+    b.floor = 12; b.phase = 'start'; b._startCombat('ashlord', {});
+    killNow(b);
+    eq([b.phase, b.emberLog.shortcut, b.emberLog.depth], ['descent', 50, Math.round(6 * b.mods.emberMult)], 'B9: beating the boss pays the 50 (depth: B10–B12 only, x the ember rate)');
+    // B5 is unchanged: 25 at the first kill, full depth
+    const f5 = new SD.Run(SD.Meta.computeMods(profileWith(SD, ids, (p) => { p.stats.eliteKills.bellhound = 1; })), { seed: 4, startFloor: 5 });
+    f5.begin(); toFight(f5); killNow(f5);
+    eq(f5.emberLog.shortcut, 25, 'B5 shortcut unchanged (25 at the first kill)');
+    // B13: a 灰の底-only run
+    const P = () => profileWith(SD, ids, cleared((p) => { p.stats.deepRuns = 1; p.stats.runs = 9; p.stats.bestFloor = 12; p.stats.lastFloor = 12; p.stats.lastRun = { floor: 12, embers: 99, won: true }; }));
+    const d = new SD.Run(SD.Meta.computeMods(P()), { seed: 6, startFloor: 13 });
+    d.begin();
+    ok(d.deepOnly && d.deep.order.slice().sort().join() === 'husk,mirror', 'B13: a 灰の底-only run, B13 / B14 order rolled at the start');
+    const met = [];
+    for (let k = 0; k < 6 && d.phase !== 'won' && d.phase !== 'dead'; k++) { toFight(d); if (d.phase !== 'idle') break; met.push([d.floor, d.enemy.id]); killNow(d); }
+    eq(met.map((x) => x[0]), [13, 14, 15, 16], 'B13 run: floors 13–16');
+    eq(met.slice(0, 2).map((x) => x[1]), d.deep.order, 'B13 run: both new enemies, once each');
+    const s = d.summary;
+    ok(s.deepOnly && !s.won && !s.settled && s.deep.cleared && s.deep.floor === 16, 'B13 run cleared: a 灰の底 result, not a main-game win');
+    eq(s.emberLog.depth, Math.round(6 * d.mods.emberMult), 'B13 run: depth embers for B14–B16 only (x the ember rate)');
+    const p = P(); const before = JSON.parse(JSON.stringify(p.stats)); const e0 = p.embers;
+    SD.Meta.applyFinishedRun(p, s);
+    eq([p.stats.runs, p.stats.wins, p.stats.deaths, p.stats.bossKills, p.stats.bestFloor, p.stats.lastFloor, JSON.stringify(p.stats.lastRun)],
+      [before.runs, before.wins, before.deaths, before.bossKills, before.bestFloor, before.lastFloor, JSON.stringify(before.lastRun)], 'B13 run: the main-game record is untouched');
+    eq([p.stats.deepRuns, p.stats.deepClears, p.stats.deepFalls, p.stats.deepBest], [2, 1, 0, 16], 'B13 run: 灰の底 record (runs, clears, falls, deepest)');
+    eq(p.embers - e0, d.embers, 'B13 run: embers counted once');
+    // fallen at B13: a 灰の底 fall, never a death
+    const f = new SD.Run(SD.Meta.computeMods(P()), { seed: 7, startFloor: 13 });
+    f.begin(); toFight(f);
+    f.hp = 1; f.block = 0; f.mods = Object.assign({}, f.mods, { secondWind: false }); f.enemy.intent = { k: 'attack', v: 99 }; f.enemy.now = null;
+    f.spin(); setPayline(f, ['lantern', 'lantern', 'lantern']); f.resolve();
+    const pf = P(); SD.Meta.applyFinishedRun(pf, f.summary);
+    eq([f.phase, f.summary.won, pf.stats.deaths, pf.stats.deepFalls, pf.stats.deepRuns], ['dead', false, 0, 1, 2], 'B13 run fallen: a 灰の底 fall, not a death');
+    const z = new SD.Run(SD.Meta.computeMods(P()), { seed: 8, startFloor: 13 });
+    z.begin(); z._die(null);
+    eq(z.summary.embers, 0, 'B13: set out and give up at once -> 0 embers');
+    // a descent fall counts as a 灰の底 fall too (and still no death)
+    const pd = SD.Meta.newProfile(); pd.stats.wins = 1;
+    SD.Meta.applyDeepResult(pd, { floor: 14, stats: { maxHit: 0 }, deep: { floor: 14, cleared: false, embers: 3, kills: 1, triples: 0, bonds: 0, eliteKills: [] } });
+    eq([pd.stats.deepRuns, pd.stats.deepFalls, pd.stats.deaths], [1, 1, 0], 'a fall after a descent: 灰の底 fall +1, deaths unchanged');
+  }
+
   section('save / load: old saves load, new fields default safely');
   {
     const store = {};
@@ -622,7 +707,8 @@ function unit() {
     const res = ctxSD.Meta.applyRunResult(p2, run.summary);
     ok(res && p2.stats.runs === 7, 'applyRunResult with new stats');
     ok(JSON.parse(store[ctxSD.Meta.SAVE_KEY]).version === 1, 'save version unchanged (old saves are not wiped)');
-    eq([p.stats.deepRuns, p.stats.deepBest, p.stats.deepClears, ctxSD.Meta.computeMods(p).deepUnlocked], [0, 0, 0, false], '灰の底 records default to 0; locked until a win');
+    eq([p.stats.deepRuns, p.stats.deepBest, p.stats.deepClears, p.stats.deepFalls, ctxSD.Meta.computeMods(p).deepUnlocked], [0, 0, 0, 0, false], '灰の底 records default to 0; locked until a win');
+    ok(ctxSD.Meta.computeMods(p).shortcuts.indexOf(13) < 0 && ctxSD.Meta.computeMods(p).shortcuts.indexOf(9) < 0, 'an old save: 第三層から / 灰の底から closed');
     p.stats.wins = 1;
     ok(ctxSD.Meta.computeMods(p).deepUnlocked, 'a won save unlocks 灰の底');
   }

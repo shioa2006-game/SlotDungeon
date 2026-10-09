@@ -9,6 +9,10 @@
  *                                              "decision turns" (turns the UI stops on: shouldAutoResolve() false). BASELINE_JSON=path saves raw data.
  *                                              After the clear the bot always takes 灰の底 (さらに降りる); [F] reports the descent.
  *   node tools/sim.js deep [n]                 灰の底: each kit against 重ね殻 / 返し鏡 / 深淵の修道院長 on a late-run board (which branch answers which enemy)
+ *   ENTRY=b5|b9|mix node tools/sim.js baseline <strategy> [n]   where runs start after the clear (default b5 = as in stage 3a;
+ *                                              b9 = 第三層から; mix = B9 and 灰の底から B13 in turn). [G] compares the starts.
+ *   node tools/sim.js entry [n]                16 builds (4 strategies x 4 carving tastes), starts rotated B5 / B9 / B13 after the clear:
+ *                                              boss wins by start and 灰の底 clears (B9 descent vs B13 direct), embers per minute
  * Bots play through the real engine (js/core). NOSCRIPT=1 keeps the bots from using 拍子木 / 借り火 even when lit. */
 'use strict';
 const path = require('path');
@@ -329,7 +333,7 @@ function campaign(strategy, seed) {
   let total = 0;
   for (let i = 0; i < 30; i++) {
     const mods = SD.Meta.computeMods(profile);
-    const start = mods.shortcuts.length ? Math.max(...mods.shortcuts) : 1;
+    const start = pickStart(mods, 'b5', 0);
     const { summary } = playRun(profile, { seed: seed * 1000 + i, startFloor: start, smart: true });
     SD.Meta.applyFinishedRun(profile, summary);
     total += summary.estSeconds;
@@ -357,22 +361,34 @@ function buyNodesAll(profile, strategy) {
 }
 const treeOwned = (profile) => SD.Data.SKILLS.filter((s) => profile.unlocked[s.id]).length;
 const treeLeftCost = (profile) => SD.Data.SKILLS.filter((s) => !profile.unlocked[s.id]).reduce((t, s) => t + s.cost, 0);
+// Where a run starts. b5: the deepest pre-clear shortcut (as before the post-clear shortcuts existed); b9: 第三層から once open;
+// mix: B9 and 灰の底から (B13) in turn once both are open; rotate: B5 / B9 / B13 in turn (to compare the starts on the same profiles).
+function pickStart(mods, policy, k) {
+  const pre = mods.shortcuts.filter((f) => !SD.Data.SHORTCUTS[f].postClear);
+  const base = pre.length ? Math.max(...pre) : 1;
+  const has = (f) => mods.shortcuts.indexOf(f) >= 0;
+  if (policy === 'b9') return has(9) ? 9 : base;
+  if (policy === 'mix') return has(13) && k % 2 === 1 ? 13 : has(9) ? 9 : base;
+  if (policy === 'rotate') { const c = [base].concat([9, 13].filter(has)); return c[k % c.length]; }
+  return base;
+}
 function baselineCampaign(strategy, seed, opts = {}) {
   const FULL_RUNS = opts.fullRuns || 5, CAP = opts.cap || 150;
+  const policy = opts.entry || LOG.entry || 'b5';
   const profile = SD.Meta.newProfile();
   const runs = [];
-  let clear = null, fullAt = null, sec = 0;
+  let clear = null, fullAt = null, sec = 0, postK = 0;
   for (let i = 0; i < CAP; i++) {
     const full = treeOwned(profile) === SD.Data.SKILLS.length;
     LOG.stage = !clear ? 'pre' : full ? 'full' : 'post';
     LOG.tree = treeOwned(profile);
     const mods = SD.Meta.computeMods(profile);
-    const start = mods.shortcuts.length ? Math.max(...mods.shortcuts) : 1;
+    const start = pickStart(mods, policy, clear ? postK++ : 0);
     const { summary } = playRun(profile, { seed: seed * 1000 + i, startFloor: start, smart: true });
     SD.Meta.applyFinishedRun(profile, summary);
     sec += summary.estSeconds;
-    runs.push({ i: i + 1, stage: LOG.stage, tree: LOG.tree, start, floor: summary.floor, won: !!summary.won, embers: summary.embers, sec: summary.estSeconds,
-      deep: summary.deep ? { floor: summary.floor, cleared: summary.deep.cleared, embers: summary.deep.embers, sec: summary.estSeconds - summary.baseSeconds } : null });
+    runs.push({ i: i + 1, stage: LOG.stage, tree: LOG.tree, start, floor: summary.floor, won: !!summary.won, embers: summary.embers, sec: summary.estSeconds, deepOnly: !!summary.deepOnly,
+      deep: summary.deep ? { floor: summary.floor, cleared: summary.deep.cleared, embers: summary.deep.embers, sec: summary.deepOnly ? summary.estSeconds : summary.estSeconds - summary.baseSeconds } : null });
     if (summary.won && !clear) {
       clear = { runs: i + 1, min: sec / 60, owned: treeOwned(profile), leftNodes: SD.Data.SKILLS.length - treeOwned(profile), leftCost: treeLeftCost(profile), embersInHand: profile.embers };
     }
@@ -523,7 +539,7 @@ if (mode === 'run1') {
 }
 if (mode === 'baseline') {
   const strategy = a1 || 'balanced', n = +a2 || 10;
-  LOG.measure = true; LOG.mfights = []; LOG.kit = strategy;
+  LOG.measure = true; LOG.mfights = []; LOG.kit = strategy; LOG.entry = process.env.ENTRY || 'b5';
   const res = [];
   for (let s = 1; s <= n; s++) res.push(baselineCampaign(strategy, s));
   const f1 = (x) => (Number.isFinite(x) ? x.toFixed(1) : '-'), f0 = (x) => (Number.isFinite(x) ? x.toFixed(0) : '-');
@@ -562,8 +578,8 @@ if (mode === 'baseline') {
   for (const x of MF.filter((y) => y.stage !== 'pre' && y.cat === 'normal')) (byE[x.enemy] = byE[x.enemy] || []).push(x);
   console.log('  ' + Object.keys(byE).sort().map((k) => `${k} ${f0(byE[k].filter((x) => x.kill && x.turns === 1).length / byE[k].length * 100)}%/${f1(mean(byE[k].map((x) => x.dec)))} (n${byE[k].length})`).join('  '));
   console.log('\n[F] 灰の底 (the bot always descends after a settled boss win)');
-  for (const [st, name, pick] of [['post', 'first 2 boss wins after the clear', (r) => r.runs.filter((x) => x.stage === 'post' && x.deep).slice(0, 2)],
-    ['post', 'after the clear (all)', (r) => r.runs.filter((x) => x.stage === 'post' && x.deep)], ['full', 'whole tree lit', (r) => r.runs.filter((x) => x.stage === 'full' && x.deep)]]) {
+  for (const [st, name, pick] of [['post', 'first 2 boss wins after the clear', (r) => r.runs.filter((x) => x.stage === 'post' && x.deep && !x.deepOnly).slice(0, 2)],
+    ['post', 'after the clear (all)', (r) => r.runs.filter((x) => x.stage === 'post' && x.deep && !x.deepOnly)], ['full', 'whole tree lit', (r) => r.runs.filter((x) => x.stage === 'full' && x.deep && !x.deepOnly)]]) {
     const D = res.flatMap(pick);
     if (!D.length) { console.log(`  ${name.padEnd(34)} (no descents)`); continue; }
     const at = (f) => f0(D.filter((x) => x.deep.floor >= f || x.deep.cleared).length / D.length * 100);
@@ -574,7 +590,51 @@ if (mode === 'baseline') {
     console.log(`  -- fights in 灰の底, ${name}`);
     for (const id of ['husk', 'mirror', 'abbot_deep']) row(`${SD.Data.ENEMIES[id].name}`, MF.filter((x) => x.stage === st && x.enemy === id && x.floor >= 13));
   }
+  if (LOG.entry && LOG.entry !== 'b5') {
+    console.log(`\n[G] starts after the clear (ENTRY=${LOG.entry})`);
+    for (const st of ['post', 'full']) for (const sf of [5, 9, 13]) {
+      const A = res.flatMap((r) => r.runs.filter((x) => x.stage === st && x.start === sf));
+      if (!A.length) continue;
+      const D = A.filter((x) => x.deep);
+      console.log(`  ${st.padEnd(4)} B${String(sf).padEnd(2)} runs ${String(A.length).padStart(4)}  boss won ${sf === 13 ? ' -' : f0(A.filter((x) => x.won).length / A.length * 100) + '%'}` +
+        `  灰の底 reached ${f0(D.length / A.length * 100)}%  cleared ${D.length ? f0(D.filter((x) => x.deep.cleared).length / D.length * 100) + '%' : '-'}` +
+        `  min/run ${f1(mean(A.map((x) => x.sec / 60)))}  embers/min ${f1(A.reduce((t, x) => t + x.embers, 0) / A.reduce((t, x) => t + x.sec / 60, 0))}`);
+    }
+  }
   if (process.env.BASELINE_JSON) require('fs').writeFileSync(process.env.BASELINE_JSON, JSON.stringify({ strategy, n, res: res.map((r) => ({ clear: r.clear, fullAt: r.fullAt, runs: r.runs })), fights: MF }));
+}
+if (mode === 'entry') {
+  // B13 direct vs B9 + descent, per build (4 strategies x 4 carving tastes), on the same profiles (starts rotate after the clear)
+  const n = +a1 || 8;
+  LOG.entry = 'rotate';
+  const TASTES = {
+    default: null,
+    blade: { blade: 6, flame: 2, ward: 1.5, heart: 1.5, lantern: 0.3, wild: 6, skull: -5 },
+    flame: { flame: 6, blade: 2, ward: 1.5, heart: 1.5, lantern: 0.3, wild: 6, skull: -5 },
+    ward: { ward: 6, heart: 3, blade: 1.5, flame: 1.5, lantern: 0.3, wild: 5, skull: -5 },
+  };
+  const all = [];
+  let seedN = 1;
+  for (const strat of ['balanced', 'valor', 'hearth', 'weave']) for (const taste of Object.keys(TASTES)) {
+    LOG.symPref = TASTES[taste];
+    for (let s = 0; s < n; s++) { const r = baselineCampaign(strat, 500 + seedN++, { fullRuns: 9 }); for (const x of r.runs) if (x.stage !== 'pre') all.push(Object.assign({ build: strat + '/' + taste }, x)); }
+  }
+  LOG.symPref = null;
+  const pc = (a, f) => (a.length ? Math.round(a.filter(f).length / a.length * 100) : NaN);
+  const show = (v) => (Number.isFinite(v) ? String(v).padStart(3) + '%' : '  - ');
+  const line = (label, A) => {
+    const b5 = A.filter((x) => x.start === 5), b9 = A.filter((x) => x.start === 9), b13 = A.filter((x) => x.start === 13);
+    const d9 = b9.filter((x) => x.deep), d13 = b13.filter((x) => x.deep);
+    const c9 = pc(d9, (x) => x.deep.cleared), c13 = pc(d13, (x) => x.deep.cleared);
+    const epm = (B) => (B.length ? (B.reduce((t, x) => t + x.embers, 0) / B.reduce((t, x) => t + x.sec / 60, 0)).toFixed(0) : '-');
+    console.log(`  ${label.padEnd(16)} boss won B5 ${show(pc(b5, (x) => x.won))} B9 ${show(pc(b9, (x) => x.won))}  |  灰の底 cleared: B9→ ${show(c9)} (n${String(d9.length).padStart(3)})  B13 ${show(c13)} (n${String(d13.length).padStart(3)})  diff ${Number.isFinite(c13 - c9) ? (c13 - c9 > 0 ? '+' : '') + (c13 - c9) : '-'}  |  embers/min B5 ${epm(b5)} B9 ${epm(b9)} B13 ${epm(b13)}  min/run B9 ${b9.length ? (b9.reduce((t, x) => t + x.sec, 0) / b9.length / 60).toFixed(1) : '-'} B5 ${b5.length ? (b5.reduce((t, x) => t + x.sec, 0) / b5.length / 60).toFixed(1) : '-'}`);
+  };
+  for (const st of ['post', 'full']) {
+    console.log(`\n== ${st === 'post' ? 'after the clear, tree not complete' : 'whole tree lit'}`);
+    const S = all.filter((x) => x.stage === st);
+    line('ALL', S);
+    for (const b of [...new Set(S.map((x) => x.build))]) line(b, S.filter((x) => x.build === b));
+  }
 }
 if (mode === 'deep') {
   // Which branch answers which enemy: every kit fights each 灰の底 enemy on a rich late-run board (10 carvings + 3 relics).

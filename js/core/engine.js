@@ -100,7 +100,15 @@
       if (sc) {
         for (let i = 0; i < sc.carvings; i++) this.pending.push('carving');
         for (let i = 0; i < sc.relics + (this.mods.abbotBonus && this.startFloor === 5 ? 1 : 0); i++) this.pending.push('relic');
-        ev.push({ t: 'shortcut', floor: this.startFloor, embers: sc.embers });
+        // 灰の底から: a 灰の底-only run (no boss, no main-game record); B13 / B14 order is rolled now
+        if (sc.deepOnly) {
+          this.deep = { order: this.rng.shuffle(D().DEEP_PAIR.slice()) };
+          this.deepOnly = true;
+          this.settled = { embers: 0, depth: this._depthEmbers(this.startFloor), stats: Object.assign({}, this.stats), elites: 0, summary: null };
+        }
+        const sev = { t: 'shortcut', floor: this.startFloor, embers: sc.embers };
+        if (sc.postClear) Object.assign(sev, { label: sc.label, bossEmbers: sc.bossEmbers || 0, deepOnly: !!sc.deepOnly }); // (B5's event is unchanged)
+        ev.push(sev);
       }
       if (this.mods.chiselStart > 0) return ev.concat(this._beginChisel(this.mods.chiselStart, 'remove', 'start'));
       return ev.concat(this._continue());
@@ -1631,10 +1639,15 @@
       this._gainEmbers(e.ember, 'kill');
       ev.push({ t: 'embers', amount: e.ember, total: this.embers, src: 'kill' });
       const sc = D().SHORTCUTS[this.startFloor];
-      if (sc && !this._shortcutPaid) { this._shortcutPaid = true; this._gainEmbers(sc.embers, 'shortcut'); ev.push({ t: 'embers', amount: sc.embers, total: this.embers, src: 'shortcut' }); }
+      if (sc && sc.embers > 0 && !this._shortcutPaid) { this._shortcutPaid = true; this._gainEmbers(sc.embers, 'shortcut'); ev.push({ t: 'embers', amount: sc.embers, total: this.embers, src: 'shortcut' }); }
       if (e.elite || e.boss) this.eliteKills.push(e.id);
       this.lastFightTurns = this.fight.turn + 1;
-      if (e.boss) { this.bossHpPct = 0; return ev.concat(this.mods.deepUnlocked && !this.deep ? this._settleBoss() : this._win()); }
+      if (e.boss) {
+        this.bossHpPct = 0;
+        // 第三層から: the skipped floors are paid back only when the run gets this far
+        if (sc && sc.bossEmbers) { this._gainEmbers(sc.bossEmbers, 'shortcut'); ev.push({ t: 'embers', amount: sc.bossEmbers, total: this.embers, src: 'shortcut' }); }
+        return ev.concat(this.mods.deepUnlocked && !this.deep ? this._settleBoss() : this._win());
+      }
       if (this.deep && this.floor >= D().DEEP_LAST_FLOOR) return ev.concat(this._finishDeep(true));
       for (const r of this.reels) {
         const keep = r.strip[r.pos];
@@ -1681,8 +1694,15 @@
       return [{ t: 'runWon' }, { t: 'runEnd', summary: this.summary }];
     }
 
+    // Depth embers for reaching `floor`. A post-clear shortcut (第三層から / 灰の底から) pays only for the floors descended
+    // below the floor it starts on: setting out and giving up at once earns nothing. B1 / B5 runs: floor x2 as always.
+    _depthEmbers(floor) {
+      const sc = D().SHORTCUTS[this.startFloor];
+      return Math.max(0, floor * 2 - (sc && sc.postClear ? this.startFloor * 2 : 0));
+    }
     _finish(won) {
-      this._gainEmbers(this.floor * 2, 'depth');
+      const dep = this._depthEmbers(this.floor), sc = D().SHORTCUTS[this.startFloor];
+      if (dep > 0 || !(sc && sc.postClear)) this._gainEmbers(dep, 'depth'); // (a 0 gain still rounds up to 1: kept for B1 / B5 as before)
       this.summary = this._summaryNow(won);
     }
     _summaryNow(won) {
@@ -1699,7 +1719,7 @@
     _settleBoss() {
       this._finish(true);
       this.summary.settled = true;
-      this.settled = { embers: this.embers, depth: this.floor * 2, stats: Object.assign({}, this.stats), elites: this.eliteKills.length, summary: this.summary };
+      this.settled = { embers: this.embers, depth: this._depthEmbers(this.floor), stats: Object.assign({}, this.stats), elites: this.eliteKills.length, summary: this.summary };
       this.phase = 'descent';
       return [{ t: 'runWon' }, { t: 'bossSettled', summary: this.summary }];
     }
@@ -1727,11 +1747,12 @@
     // after the boss (Meta.applyDeepResult adds just that), summary.base is the settled summary (for a one-shot apply).
     _finishDeep(cleared) {
       const s0 = this.settled, st = this.stats, b = s0.stats;
-      this._gainEmbers(Math.max(0, this.floor * 2 - s0.depth), 'depth');
+      const dep = this._depthEmbers(this.floor) - s0.depth;
+      if (dep > 0) this._gainEmbers(dep, 'depth');
       this.phase = cleared ? 'won' : 'dead';
-      const sum = this._summaryNow(true);
-      sum.settled = true;
-      sum.base = s0.summary;
+      const sum = this._summaryNow(!this.deepOnly);
+      if (this.deepOnly) sum.deepOnly = true; // started at 灰の底: not a main-game result (Meta.applyDeepResult only)
+      else { sum.settled = true; sum.base = s0.summary; }
       sum.deep = {
         floor: this.floor, cleared: !!cleared, embers: this.embers - s0.embers,
         kills: st.kills - b.kills, triples: (st.triples || 0) - (b.triples || 0), bonds: (st.bonds || 0) - (b.bonds || 0),

@@ -19,7 +19,7 @@
         eliteKills: {},        // enemyId -> count
         maxHit: 0,
         lastRun: null,         // summary of last run (for death-screen comparisons)
-        deepRuns: 0, deepBest: 0, deepClears: 0, // 灰の底: descents, deepest floor, B16 cleared
+        deepRuns: 0, deepBest: 0, deepClears: 0, deepFalls: 0, // 灰の底: runs there (descents + direct), deepest floor, B16 cleared, fallen
       },
       seen: {},                // tutorial / first-time flags
       // comboPause: 'smart' = once 継ぎ留め/拍子木 are lit, a trine/bond waits for you while something can still be done; 'off' = always fires
@@ -190,7 +190,12 @@
       awakening: st.runs === 0 && !u('nudge'),
       doors: st.runs >= 1,
       shrines: st.runs >= 2,
-      shortcuts: Object.keys(D().SHORTCUTS).map(Number).filter((f) => (st.eliteKills[D().SHORTCUTS[f].gate] || 0) > 0),
+      shortcuts: Object.keys(D().SHORTCUTS).map(Number).filter((f) => {
+        const sc = D().SHORTCUTS[f];
+        if (sc.gate && !((st.eliteKills[sc.gate] || 0) > 0)) return false;
+        if (sc.gateStat && !((st[sc.gateStat[0]] || 0) >= sc.gateStat[1])) return false;
+        return true;
+      }),
       abbotBonus: (st.eliteKills.abbot || 0) > 0,
       deepUnlocked: (st.wins || 0) > 0, // after the first clear, 灰輪の主 can be followed into 灰の底
     };
@@ -206,10 +211,10 @@
   // deaths / boss kills. Returns { newDeepBest, firstDeepClear }.
   function applyDeepResult(profile, summary) {
     const s = profile.stats, d = summary.deep;
-    const res = { newDeepBest: summary.floor > (s.deepBest || 0), firstDeepClear: d.cleared && !(s.deepClears > 0), prevDeepBest: s.deepBest || 0 };
+    const res = { newDeepBest: summary.floor > (s.deepBest || 0), firstDeepClear: d.cleared && !(s.deepClears > 0), prevDeepBest: s.deepBest || 0, firstDeepRun: !(s.deepRuns > 0) };
     s.deepRuns = (s.deepRuns || 0) + 1;
     s.deepBest = Math.max(s.deepBest || 0, summary.floor);
-    if (d.cleared) s.deepClears = (s.deepClears || 0) + 1;
+    if (d.cleared) s.deepClears = (s.deepClears || 0) + 1; else s.deepFalls = (s.deepFalls || 0) + 1;
     s.kills += d.kills;
     s.triples += d.triples;
     s.bonds += d.bonds;
@@ -217,11 +222,13 @@
     for (const id of d.eliteKills) s.eliteKills[id] = (s.eliteKills[id] || 0) + 1;
     s.totalEmbers += d.embers;
     profile.embers += d.embers;
-    s.lastRun = Object.assign({}, s.lastRun, { embers: ((s.lastRun && s.lastRun.embers) || 0) + d.embers, deepFloor: summary.floor, deepCleared: d.cleared });
+    // a run started at 灰の底 is not part of the main game: its 前回 stays the last main run
+    if (!summary.deepOnly) s.lastRun = Object.assign({}, s.lastRun, { embers: ((s.lastRun && s.lastRun.embers) || 0) + d.embers, deepFloor: summary.floor, deepCleared: d.cleared });
     return res;
   }
   // A whole finished run in one call (tools / tests): a settled boss win plus its descent is applied exactly once.
   function applyFinishedRun(profile, summary) {
+    if (summary.deepOnly) return applyDeepResult(profile, summary); // 灰の底 only: the main-game record is untouched
     if (summary.deep) { const res = applyRunResult(profile, summary.base); return Object.assign(res, applyDeepResult(profile, summary)); }
     return applyRunResult(profile, summary);
   }

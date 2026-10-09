@@ -119,12 +119,13 @@
       const Art = SD.Art;
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, 1280, 446); ctx.clip();
-      if (Art.drawBackground) Art.drawBackground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth });
-      if (this.zone === 'ashdeep') { // 灰の底: the same ruins, drained to ash
-        ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.75; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
-        ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.18; ctx.fillStyle = '#1a1820'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
-      }
-      else { ctx.fillStyle = '#17142a'; ctx.fillRect(0, 0, 1280, 446); }
+      if (Art.drawBackground) {
+        Art.drawBackground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth });
+        if (this.zone === 'ashdeep') { // 灰の底: the same ruins, drained to ash
+          ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.75; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
+          ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.18; ctx.fillStyle = '#1a1820'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
+        }
+      } else { ctx.fillStyle = '#17142a'; ctx.fillRect(0, 0, 1280, 446); }
       if (this.bossDark > 0) { ctx.fillStyle = `rgba(5,3,10,${this.bossDark * 0.5})`; ctx.fillRect(0, 0, 1280, 446); }
       // stage lighting: the backdrop sits a step back, the wheel below is the footlight
       const g = ctx.createLinearGradient(0, 0, 0, 446);

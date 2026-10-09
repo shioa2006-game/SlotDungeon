@@ -681,6 +681,15 @@
       }
       return false;
     }
+    // After a manipulation (nudge / respin / 写し身 / 鍵 / 祝福 / 台本送り) the UI goes on like this: a trine/bond/quad, or
+    // nothing meaningful left to do, hands the turn to shouldAutoResolve(); otherwise the player decides. True when the
+    // turn will fire by itself right after the manipulation (QA-004: the hover preview says so before you act).
+    firesAfterManip() {
+      if (this.phase !== 'spun' || this.awaken.ready) return false;
+      const R = this.forecast();
+      const great = R.combos.some((c) => c.k === 'trine' || c.k === 'bond' || c.k === 'quad');
+      return (great || !this.needsDecision()) && this.shouldAutoResolve();
+    }
     // Why the turn stopped on a combo (for the UI): null when it would not have stopped.
     comboPauseReason() {
       if (this.phase !== 'spun' || !this.mods.comboPause) return null;
@@ -1040,7 +1049,7 @@
         mult: 1, multNotes: [], marked: null, markedN: 0, thirst: false,
         bladeRaw: 0, bladeArmor: 0, blade: 0, flame: 0, skullDmg: 0, reaper: 0, selfDmg: 0,
         block: 0, heal: 0, embers: 0, sparks: 0, burn: 0, pyre: 0, cleanse: false, rampart: false, guardian: false,
-        stagger: false, executed: false, sealBreaks: 0, sealedAfter: false, sealMult: 1, armor: 0,
+        stagger: false, staggerWard: false, staggerBreak: false, shellNeed: 0, executed: false, sealBreaks: 0, sealedAfter: false, sealMult: 1, armor: 0,
         directDmg: 0, totalDmg: 0, utility: 0,
       };
       if (f.momentum && f.resolves === 0) { res.mult *= 1.5; res.multNotes.push('追撃 ×1.5'); }
@@ -1090,7 +1099,7 @@
           if (n >= 3) { res.burn += 4; if (m.pyre) res.pyre = 1; }
         } else if (s === 'ward') {
           res.block += Math.round(amount('ward'));
-          if (n >= 2 && e.intent && e.intent.k === 'charge') res.stagger = true;
+          if (n >= 2 && e.intent && e.intent.k === 'charge') { res.stagger = true; res.staggerWard = true; }
           if (n >= 2 && m.guardian) res.wardReflect = true;
           if (n >= 3) { res.rampart = true; if (m.guardian) res.guardian = true; }
         } else if (s === 'heart') {
@@ -1127,6 +1136,14 @@
         if (this.hasRelic('hatwax')) b = Math.min(12, b);
         res.pyreDmg = Math.round(b * 2 * ((e.seals || 0) - res.sealBreaks > 0 ? 0.5 : 1));
         res.totalDmg += res.pyreDmg;
+      }
+      // 灰鐘の番人 (breakStagger): on the 構え turn, direct hits that get through the shell to the body break the stance.
+      // Exact: the shell takes blade, flame and the pact's skulls in that order (as _resolveLine applies them).
+      const ED = e.id && D().ENEMIES[e.id];
+      if (ED && ED.breakStagger && e.intent && e.intent.k === 'charge' && e.hp > 0) {
+        const direct = Math.round(res.blade * res.sealMult) + Math.round(res.flame * res.sealMult) + Math.round(res.skullDmg * res.sealMult);
+        res.shellNeed = Math.max(0, (e.block || 0) + 1 - direct);
+        if (direct > (e.block || 0)) { res.staggerBreak = true; res.stagger = true; }
       }
       // utility: used for Wild assignment and by bots
       const incoming = e.intent && e.intent.k !== 'charge' ? this.intentDamage(e.intent) : 0;
@@ -1207,7 +1224,7 @@
         e.seals -= R.sealBreaks;
         ev.push({ t: 'sealBreak', n: R.sealBreaks, seals: e.seals });
       }
-      if (R.stagger) { e.staggered = true; ev.push({ t: 'stagger' }); }
+      if (R.staggerWard) { e.staggered = true; ev.push({ t: 'stagger' }); }
       // 1) wards
       if (R.block > 0) { this.block += R.block; ev.push({ t: 'act', hero: 'knight', sym: 'ward', block: R.block, total: this.block, big: R.groups.ward.n >= 3 }); }
       // 2) hearts
@@ -1272,6 +1289,8 @@
         ev.push({ t: 'act', hero: null, sym: 'skull', dmg: r.dmg, absorbed: r.absorbed, hp: e.hp, sealed: sm < 1 });
       }
       if (R.reaper > 0) { const r = hit(R.reaper, 'reaper'); ev.push({ t: 'reaper', dmg: r.dmg, hp: e.hp }); }
+      // 灰鐘の番人: the hits broke through the shell on the 構え turn (two wards, when also there, already staggered it)
+      if (R.staggerBreak && !R.staggerWard && e.hp > 0) { e.staggered = true; ev.push({ t: 'stagger', by: 'break' }); }
       // 5) reflect stance
       if (e.now && e.now.k === 'reflect' && dealt > 0 && e.hp > 0) {
         const refl = Math.round(dealt * 0.5);
@@ -1527,6 +1546,18 @@
         const P = { random: chain, chain, dice: false, damage: 0, debtRaw: 0, hits: [], reflect: null, skipped: null, debt: null, next: null, enemyAfter: null,
           partyDies: c.phase === 'dead', enemyDies: firstKill, secondWind: ev.some((x) => x.t === 'secondWind'), hpAfter: c.hp };
         void enemy0;
+        // QA-003: the enemy's HP right after this 発動 (before its turn), and what its turn then does to that number
+        P.strikeHp = this.enemy.hp; P.burnTick = 0; P.healed = 0; P.thornsBack = 0; P.diesBy = null;
+        let enemyTurn = false, lastCause = 'strike';
+        for (const x of ev) {
+          if (x.t === 'enemyTurn') enemyTurn = true;
+          if (!enemyTurn && x.hp != null && ((x.t === 'act' && (x.sym === 'blade' || x.sym === 'flame' || x.sym === 'skull')) || x.t === 'reaper' || x.t === 'pyre')) P.strikeHp = x.hp;
+          if (enemyTurn && x.t === 'burnTick') { P.burnTick += x.dmg; lastCause = 'burn'; }
+          if (enemyTurn && x.t === 'enemyHeal') P.healed += x.amount;
+          if (enemyTurn && x.t === 'enemyAttack' && x.thorns) { P.thornsBack += x.thorns; lastCause = 'thorns'; }
+          if (x.t === 'enemyDie' && !P.diesBy) P.diesBy = enemyTurn ? lastCause : 'strike';
+        }
+        if (P.diesBy === 'strike') P.strikeHp = 0;
         let inDebt = false;
         for (const x of ev) {
           if (x.t === 'staggerCancel') P.skipped = x.skipped || null;
@@ -1567,7 +1598,7 @@
       return this._sim((c) => {
         const ev = act(c);
         if (!ev || !ev.length || c.phase !== 'spun') return null;
-        return { R: c.forecast(), turn: c.previewTurn(), band: c.scriptBand() };
+        return { R: c.forecast(), turn: c.previewTurn(), band: c.scriptBand(), fires: c.firesAfterManip() };
       });
     }
     // The script and the turn's outcome after borrowing (借り火): the debt cell shows on the band.

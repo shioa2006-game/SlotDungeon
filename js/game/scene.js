@@ -148,7 +148,8 @@
       if (V && st.showPartyBar) drawPartyBar(ctx, V, this.time);
       if (this.enemy && V && V.enemy && st.showEnemyBar) {
         const e = this.enemy, info = e.info();
-        if (V.enemy.boss) drawEnemyBar(ctx, V.enemy, 640, 104, this.time, st.ghostPct);
+        // the boss's bar hangs at the top centre: its name (above the bar) keeps clear of the DOM HUD too (QA-001)
+        if (V.enemy.boss) drawEnemyBar(ctx, V.enemy, 640, belowHud(st.hudRects ? st.hudRects() : null, 640 - 260, 520, 104 - 26, 42) + 26, this.time, st.ghostPct);
         else drawEnemyBar(ctx, V.enemy, e.x, 392, this.time, st.ghostPct);
         this.bandRects = [];
         if (st.intent) {
@@ -268,13 +269,16 @@
 
   // 灰輪の台本: the rest of the enemy's script as a little brass-and-stone ribbon hanging to the right of the plaque,
   // flowing toward the party (nearest cell first). Returns hit rects for tooltips.
+  const BAND_GAP = 13;
+  const bandCellSize = (c) => (c.role === 'next2' ? 36 : c.role === 'skip' || c.role === 'debt' ? 38 : 42);
+  const bandWidth = (band) => band.cells.slice(1).reduce((s, c) => s + bandCellSize(c) + BAND_GAP, 0);
   function drawBand(ctx, band, x0, cy, t, st) {
     const Art = SD.Art, rects = [];
     const cells = band.cells.slice(1);
     if (!cells.length) return rects;
-    const size = (c) => (c.role === 'next2' ? 36 : c.role === 'skip' || c.role === 'debt' ? 38 : 42);
-    const gap = 13;
-    const total = cells.reduce((s, c) => s + size(c) + gap, 0);
+    const size = bandCellSize;
+    const gap = BAND_GAP;
+    const total = bandWidth(band);
     const slide = Math.max(0, Math.min(1, st.bandSlide || 0)) * 55;
     ctx.save();
     // the rail (a brass rod like the reel ribbons' bracket)
@@ -360,15 +364,68 @@
     return rects;
   }
 
+  // The pieces of the intent group around its plaque, as offsets from the plaque's top y (the ±2 bob included):
+  // label, hint bubble, 致命 tag, the stance badge with its label, and the script band with its caption and tags.
+  function intentParts(ctx, I, cx, x, w, h, band) {
+    const parts = [{ x, dy: -4, w, h: h + 8 }];
+    ctx.save();
+    ctx.font = `700 13px ${SD.Game.fontUI}`;
+    const lw = ctx.measureText(I.label || '').width + 8;
+    parts.push({ x: cx - lw / 2, dy: -25, w: lw, h: 21 });
+    if (I.hint) { const hw = ctx.measureText(I.hint).width + 18; parts.push({ x: cx - hw / 2, dy: -50, w: hw, h: 24 }); }
+    if (I.lethal) parts.push({ x: x + w - 34, dy: -14, w: 44, h: 24 });
+    if (I.now) {
+      const nx = band ? cx - w / 2 - 38 : cx + w / 2 + 34;
+      ctx.font = `700 12px ${SD.Game.fontUI}`;
+      const nw = Math.max(60, ctx.measureText(I.now.label || '').width + 8);
+      parts.push({ x: nx - nw / 2, dy: h / 2 - 45, w: nw, h: 75 }); // its label above, the badge (48) below
+    }
+    if (band) parts.push({ x: x + w + 6, dy: h / 2 - 40, w: bandWidth(band) + 20 + 55, h: 80 }); // caption, cells, 不発/借り tags (+ slide)
+    ctx.restore();
+    return parts;
+  }
+  // QA-001: the DOM HUD over the stage (depth beads, next-灯紋 bar, relics, plaques) must never cover the enemy's
+  // plaque or its script band. When a piece would hang under a HUD rect, the whole group moves down just enough.
+  function clearOfHud(ctx, I, cx, x, w, h, y, band, hud) {
+    const parts = intentParts(ctx, I, cx, x, w, h, band), M = 4;
+    for (let pass = 0; pass < 6; pass++) {
+      let moved = false;
+      for (const p of parts) for (const r of hud) {
+        const top = y + p.dy;
+        if (p.x < r.x + r.w + M && p.x + p.w > r.x - M && top < r.y + r.h + M && top + p.h > r.y - M) { y = r.y + r.h + M - p.dy; moved = true; }
+      }
+      if (!moved) break;
+    }
+    return y;
+  }
+
+  // The top y (≥ top) at which a w×h rect at x no longer touches any HUD rect (4 px apart).
+  function belowHud(hud, x, w, top, h) {
+    if (!hud) return top;
+    const M = 4;
+    for (let pass = 0; pass < 6; pass++) {
+      let moved = false;
+      for (const r of hud) if (x < r.x + r.w + M && x + w > r.x - M && top < r.y + r.h + M && top + h > r.y - M) { top = r.y + r.h + M; moved = true; }
+      if (!moved) break;
+    }
+    return top;
+  }
+
   // intent bubble: a small hanging lantern-like plaque (+ the script band when it is on stage)
   function drawIntent(ctx, I, cx, by, t, st) {
     const Art = SD.Art;
     const w = Math.max(96, I.width || 0), h = 50;
-    const x = cx - w / 2, y = Math.max(I.hint ? 76 : 54, by - h);
+    const band = st && st.band && st.band.cells && st.band.cells.length > 1 ? st.band : null;
+    const x = cx - w / 2;
+    let y = Math.max(I.hint ? 76 : 54, by - h);
+    const hud = st && st.hudRects ? st.hudRects() : null;
+    if (hud && hud.length) {
+      y = clearOfHud(ctx, I, cx, x, w, h, y, band, hud);
+      if (st.intentBoxSink) st.intentBoxSink(intentParts(ctx, I, cx, x, w, h, band).map((p) => ({ x: p.x, y: y + p.dy, w: p.w, h: p.h }))); // (for the layout check)
+    }
     const bob = Math.sin(t * 2.4) * 2;
     const age = I.born != null ? t - I.born : 9;
     const pop = (age < 0.3 ? 1 + 0.35 * (1 - SD.Art.easeOutBack(age / 0.3)) : 1) * (I.lethal ? 1.15 : 1);
-    const band = st && st.band && st.band.cells && st.band.cells.length > 1 ? st.band : null;
     let rects = [];
     if (band) rects = drawBand(ctx, band, x + w + 22, y + h / 2 + bob, t, st);
     ctx.save(); ctx.translate(0, bob);

@@ -208,10 +208,13 @@
   }
 
   // 灰の底: fold in only what the descent added (the boss win was applied when it was settled). Never touches runs / wins /
-  // deaths / boss kills. Returns { newDeepBest, firstDeepClear }.
+  // deaths / boss kills. Returns { newDeepBest, firstDeepClear, firstDeepElite, ... }.
   function applyDeepResult(profile, summary) {
     const s = profile.stats, d = summary.deep;
     const res = { newDeepBest: summary.floor > (s.deepBest || 0), firstDeepClear: d.cleared && !(s.deepClears > 0), prevDeepBest: s.deepBest || 0, firstDeepRun: !(s.deepRuns > 0) };
+    // the B16 elite (stage 3b) beaten for the first time — kills are kept per enemy id, so the stage 3a stand-in never counts
+    const b16 = D().FLOORS[D().DEEP_LAST_FLOOR].enemy;
+    res.firstDeepElite = d.eliteKills.indexOf(b16) >= 0 && !((s.eliteKills[b16] || 0) > 0);
     s.deepRuns = (s.deepRuns || 0) + 1;
     s.deepBest = Math.max(s.deepBest || 0, summary.floor);
     if (d.cleared) s.deepClears = (s.deepClears || 0) + 1; else s.deepFalls = (s.deepFalls || 0) + 1;

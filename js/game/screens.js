@@ -136,19 +136,32 @@ const TREE_SX = 1.12;
       const b1 = U.button(verb ? `降下する <small>【${verb.name}】を試す・B1から</small>` : '降下する <small>B1から</small>', 'primary big', () => G.setScreen(new RunScreen({ startFloor: 1 })));
       this.desc.appendChild(b1);
       const post = mods.shortcuts.some((f) => SD.Data.SHORTCUTS[f].postClear);
-      if (mods.shortcuts.indexOf(5) >= 0) {
-        // before the clear: exactly as it always was; after it: one compact row of shortcuts
-        const b5 = U.button(`第二層から <small>B5・刻印3+遺物${mods.abbotBonus ? 2 : 1}</small>`, post ? 'secondary sc' : 'secondary', () => G.setScreen(new RunScreen({ startFloor: 5 })));
-        this.desc.appendChild(b5);
+      this.desc.classList.toggle('post', post);
+      const has = (f) => mods.shortcuts.indexOf(f) >= 0;
+      const relics5 = mods.abbotBonus ? 2 : 1;
+      if (!post) {
+        // before the clear: exactly as it always was
+        if (has(5)) this.desc.appendChild(U.button(`第二層から <small>B5・刻印3+遺物${relics5}</small>`, 'secondary', () => G.setScreen(new RunScreen({ startFloor: 5 }))));
+        return;
       }
-      if (mods.shortcuts.indexOf(9) >= 0) {
+      // after the clear: the starts as a 2-column grid under 降下する, so the column always fits under the 灯紋 detail
+      // (a 4th cell is kept for a later start); the longer notes are on hover
+      const grid = U.el('div', 'sc-grid');
+      const cell = (f, name, sub, tip, cls) => {
+        const b = U.button(`${name} <small>${sub}</small>`, 'secondary sc' + (cls ? ' ' + cls : ''), () => G.setScreen(new RunScreen({ startFloor: f })));
+        U.bindTip(b, tip);
+        grid.appendChild(b);
+      };
+      if (has(5)) cell(5, '第二層から', `B5・刻印3+遺物${relics5}`, `<b>第二層（B5）から</b><br>支度：刻印3＋遺物${relics5}`);
+      if (has(9)) {
         const S = SD.Data.SHORTCUTS[9];
-        this.desc.appendChild(U.button(`第三層から <small>B9・刻印${S.carvings}+遺物${S.relics}・ボス撃破で残り火+${S.bossEmbers}</small>`, 'secondary sc', () => G.setScreen(new RunScreen({ startFloor: 9 }))));
+        cell(9, '第三層から', `B9・刻印${S.carvings}+遺物${S.relics}`, `<b>第三層（B9）から</b><br>支度：刻印${S.carvings}＋遺物${S.relics}<br>灰輪の主を倒すと、近道の残り火 +${S.bossEmbers}`);
       }
-      if (mods.shortcuts.indexOf(13) >= 0) {
+      if (has(13)) {
         const S = SD.Data.SHORTCUTS[13];
-        this.desc.appendChild(U.button(`灰の底から <small>B13・刻印${S.carvings}+遺物${S.relics}・本編の記録は付かない</small>`, 'secondary sc deep', () => G.setScreen(new RunScreen({ startFloor: 13 }))));
+        cell(13, '灰の底から', `B13・刻印${S.carvings}+遺物${S.relics}`, `<b>灰の底（B13）から</b><br>支度：刻印${S.carvings}＋遺物${S.relics}<br>灰の底だけの挑戦。本編の記録（挑戦・勝利など）は付かない`, 'deep');
       }
+      this.desc.appendChild(grid);
     }
 
     nodeState(n) {
@@ -254,7 +267,7 @@ const TREE_SX = 1.12;
       ctx.restore();
       // branch labels
       ctx.save(); ctx.font = `900 22px ${SD.Game.fontTitle}`; ctx.textAlign = 'center';
-      const lbl = [['運', 'weave', -90, '操作'], ['猛', 'valor', 150, '火力・絆'], ['守', 'hearth', 30, '生存']];
+      const lbl = [['運', 'weave', -90, '操作'], ['猛', 'valor', 135, '火力・絆'], ['守', 'hearth', 45, '生存']];
       for (const [ch, b, a, sub] of lbl) {
         const rr = 336, x = C.x + Math.cos((a * Math.PI) / 180) * rr * TREE_SX, y = C.y + Math.sin((a * Math.PI) / 180) * rr;
         const ly = Math.max(28, Math.min(690, y));
@@ -470,6 +483,23 @@ const TREE_SX = 1.12;
     }
 
     emberTarget() { return { x: 1110, y: 28 }; }
+
+    // The HUD the DOM lays over the stage, in stage px (depth beads, next-灯紋 bar, relics, the two plaques). The enemy's
+    // plaque and script band are drawn on the canvas below it and keep clear of these rects (QA-001). Re-read 5×/s.
+    hudRects() {
+      const now = performance.now();
+      if (this._hud && now - this._hud.t < 200) return this._hud.rects;
+      const root = UI().root(), d = this.dom || {}, rects = [];
+      const add = (el, padBottom) => {
+        if (!el || !el.isConnected || el.style.display === 'none' || !el.offsetWidth) return;
+        let x = 0, y = 0;
+        for (let n = el; n && n !== root; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; }
+        rects.push({ x, y, w: el.offsetWidth, h: el.offsetHeight + (padBottom || 0) });
+      };
+      add(d.floor); add(d.depth, 8); add(d.embers); add(d.goal); add(d.relics); // (the depth beads' 前 marks hang below the box)
+      this._hud = { t: now, rects };
+      return rects;
+    }
 
     updateGoal() {
       const g = this.goal, el = this.dom && this.dom.goal;
@@ -703,10 +733,9 @@ const TREE_SX = 1.12;
 
     afterManip() {
       if (this.run.phase !== 'spun') return;
-      const R = this.run.forecast();
-      const great = R.combos.some((c) => c.k === 'trine' || c.k === 'bond' || c.k === 'quad');
-      const canMore = this.run.needsDecision();
-      if (great || !canMore) this.afterSpin(true);
+      // a trine/bond, or nothing left to do, hands the turn to the auto-resolve (Run.firesAfterManip: the same rule the
+      // hover preview uses to say "この操作で発動" beforehand)
+      if (this.run.firesAfterManip()) this.afterSpin(true);
       else this.enterDecision();
     }
 
@@ -804,7 +833,13 @@ const TREE_SX = 1.12;
         if (this.state === 'idle') el.appendChild(U.el('div', 'cta', 'レバーを引いて運命を回す <kbd>Space</kbd>'));
         return;
       }
-      el.appendChild(U.el('div', 'ph', label || '発動の予測'));
+      const ph = U.el('div', 'ph', label || '発動の予測');
+      if (label && this.hoverPrev && this.hoverPrev.fires) {
+        // QA-004: the hovered manipulation fires the turn by itself (Run.firesAfterManip, the rule the UI then follows)
+        const combo = R.combos.some((c) => c.k === 'trine' || c.k === 'bond' || c.k === 'quad');
+        ph.appendChild(U.el('span', 'fires-tag', `この操作で発動<small>${combo ? '三連・絆' : '手が尽きる'}</small>`));
+      }
+      el.appendChild(ph);
       const rows = U.el('div', 'fc-rows');
       const row = (sym, n, val, note, cls) => {
         const r = U.el('div', 'fc-row ' + (cls || ''));
@@ -817,7 +852,7 @@ const TREE_SX = 1.12;
       const G = R.groups;
       if (G.blade && R.marked !== 'blade') row('blade', G.blade.n, R.blade, R.bladeArmor ? `鎧 -${R.bladeArmor}` : (G.blade.n >= 3 ? '鎧無視' : ''), 'dmg');
       if (G.flame && R.marked !== 'flame') row('flame', G.flame.n, R.flame, R.burn ? `燃焼+${R.burn}` : '', 'dmg');
-      if (G.ward && R.marked !== 'ward') row('ward', G.ward.n, '+' + R.block, R.stagger ? '怯ませる！' : R.guardian ? '完全防御' : R.rampart ? '反射' : '', 'blk');
+      if (G.ward && R.marked !== 'ward') row('ward', G.ward.n, '+' + R.block, R.staggerWard ? '怯ませる！' : R.guardian ? '完全防御' : R.rampart ? '反射' : '', 'blk');
       if (G.heart && R.marked !== 'heart') {
         const eff = Math.min(R.heal, run.maxHp - run.hp);
         row('heart', G.heart.n, R.thirst ? '0' : '+' + eff, R.thirst ? '渇き' : eff < R.heal ? (eff ? `（${R.heal - eff}は溢れる）` : 'HP満タン') : R.cleanse ? '浄化' : '', 'heal');
@@ -833,12 +868,30 @@ const TREE_SX = 1.12;
       if (R.multNotes.length) el.appendChild(U.el('div', 'fc-mult', R.multNotes.join(' ')));
       // outcome
       if (e) {
-        const after = Math.max(0, e.hp - Math.max(0, R.totalDmg - (e.block || 0)));
+        // the enemy's HP right after this 発動: exact from the turn preview when it is knowable (a 連鎖 spin is not),
+        // else from the forecast (QA-003: the turn preview also knows the shell vs 死神 / 起爆, which go round it)
+        const exact = T && !T.random && T.strikeHp != null;
+        const after = exact ? T.strikeHp : Math.max(0, e.hp - Math.max(0, R.totalDmg - (e.block || 0)));
         const out = U.el('div', 'fc-out');
-        out.innerHTML = after <= 0 ? '<b class="kill">撃破できる！</b>' : `敵HP <b>${e.hp}</b> → <b>${after}</b>`;
+        out.innerHTML = after <= 0 ? '<b class="kill">撃破できる！</b>' : `敵HP <b>${e.hp}</b> → <b>${after}</b> <small class="when">発動後</small>`;
         if (R.sealBreaks) out.innerHTML += ` <span class="seal">封印-${R.sealBreaks}</span>`;
         if (e.block > 0 && R.directDmg > 0 && after > 0) out.innerHTML += ` <span class="seal">殻${e.block}が先に受ける</span>`;
+        U.bindTip(out, '<b>敵HPの予測</b><br><b>発動後</b>：このターンの剣・焔・髑髏・死神・起爆を受けた直後のHP。<br>そのあと敵の番に、<b>燃焼 → 敵の行動</b>（攻撃・回復・殻）の順で進む。変わるときは下の行に出る。');
         el.appendChild(out);
+        // what the enemy's own turn then does to that number (only when it changes it)
+        if (exact && after > 0) {
+          const why = [];
+          if (T.burnTick) why.push(`燃焼 −${T.burnTick}`);
+          if (T.healed) why.push(`回復 +${T.healed}`);
+          if (T.thornsBack) why.push(`棘 −${T.thornsBack}`);
+          if (T.diesBy === 'burn') el.appendChild(U.el('div', 'fc-in fc-after', '敵の番の初めに、<b class="kill">燃焼で倒れる</b>'));
+          else if (T.diesBy) el.appendChild(U.el('div', 'fc-in fc-after', `敵の番に<b class="kill">倒れる</b>（${why.join('・') || '返したダメージ'}）`));
+          else if (T.enemyAfter && T.enemyAfter.hp !== after) el.appendChild(U.el('div', 'fc-in fc-after', `敵の番の後 <b>${T.enemyAfter.hp}</b>（${why.join('・')}）`));
+        }
+        // 灰鐘の番人's 構え: does this line break the shell (and the stance)?
+        const brk = SD.UI.breaksStance(run) && e.intent && e.intent.k === 'charge' && after > 0;
+        if (brk && R.staggerBreak) el.appendChild(U.el('div', 'fc-in', `<b class="safe">殻${e.block ? e.block + 'を' : 'なし。直撃で'}割り切る → 構えが崩れ、${e.intent.nextLabel || '強撃'}は台本から消える</b>`));
+        else if (brk && !R.staggerWard) el.appendChild(U.el('div', 'fc-in', `殻をあと <b>${R.shellNeed}</b> で割り切れる（盾2つでも崩れる）`));
         if (SD.Data.ENEMIES[e.id] && SD.Data.ENEMIES[e.id].mirror && !label && run.phase === 'spun') {
           const nx = this.band && this.band.cells.find((c) => c.role === 'next');
           const sym = nx && !nx.cond && !nx.unknown && nx.it.now && nx.it.now.sym;
@@ -878,7 +931,8 @@ const TREE_SX = 1.12;
             const back = sum(main, 'back') + sum(debt, 'back');
             el.appendChild(U.el('div', 'fc-in', `予告 ${sum(main, 'raw')}${debt.length ? ` <b class="debt">＋借り ${sum(debt, 'raw')}</b>` : ''} − 盾 ${sum(main, 'blocked') + sum(debt, 'blocked')} → <b class="${lethal ? 'hurt lethal' : dmg ? 'hurt' : 'safe'}">${lethal ? '致命' : '被ダメ ' + dmg}</b>${back ? ` <b class="back">返す ${back}</b>` : ''}`));
           } else if (it && it.k === 'charge') {
-            el.appendChild(U.el('div', 'fc-in', R.stagger ? '<b class="safe">強撃を阻止できる（台本から消える）</b>' : '次は強撃。盾2つで怯ませられる'));
+            if (SD.UI.breaksStance(run)) { if (R.staggerWard) el.appendChild(U.el('div', 'fc-in', `<b class="safe">盾2つで構えが崩れる（${it.nextLabel || '強撃'}は台本から消える）</b>`)); }
+            else el.appendChild(U.el('div', 'fc-in', R.stagger ? '<b class="safe">強撃を阻止できる（台本から消える）</b>' : '次は強撃。盾2つで怯ませられる'));
           } else if (T.partyDies) el.appendChild(U.el('div', 'fc-in', '<b class="hurt lethal">致命</b>'));
         } else if (it && after > 0) {
           if (run.fight && run.fight.debt) el.appendChild(U.el('div', 'fc-in', '<b class="debt">借りの一手</b>：中身はサイコロ次第（このターンに行われる）'));
@@ -892,7 +946,8 @@ const TREE_SX = 1.12;
             if (R.reflectIn) el.appendChild(U.el('div', 'fc-in', `反射 ${R.reflectIn}${ra ? '（盾で ' + ra + '）' : ''}`));
             el.appendChild(U.el('div', 'fc-in', `予告 ${inc} − 盾 ${blk} → <b class="${taken ? 'hurt' : 'safe'}">被ダメ ${taken}</b>`));
           } else if (it.k === 'charge') {
-            el.appendChild(U.el('div', 'fc-in', R.stagger ? '<b class="safe">強撃を阻止できる</b>' : '次は強撃。盾2つで怯ませられる'));
+            if (SD.UI.breaksStance(run)) { if (R.staggerWard) el.appendChild(U.el('div', 'fc-in', `<b class="safe">盾2つで構えが崩れる（${it.nextLabel || '強撃'}を阻止できる）</b>`)); }
+            else el.appendChild(U.el('div', 'fc-in', R.stagger ? '<b class="safe">強撃を阻止できる</b>' : '次は強撃。盾2つで怯ませられる'));
           }
         }
       }
@@ -1296,7 +1351,7 @@ const TREE_SX = 1.12;
       add('bless', Math.round(s.selfDmg / 3), 1.4, `髑髏や封じで自分が受けた傷: <b>${s.selfDmg}</b>`);
       add('cloak', Math.round(s.damageTaken / 12), 0.6, `このRunで受けた傷: <b>${s.damageTaken}</b>`);
       add('sparkjar', summary.sparksLeft >= 0 && this.mods.sparks ? s.nudges + s.respins : 0, 0.4, `ずらしと再演を <b>${s.nudges + s.respins}</b> 回使った。火種がもっとあれば…`);
-      add('secondwind', s.heavyTaken >= 10 ? 1 : 0, 6, `強撃で受けた傷: <b>${s.heavyTaken}</b>`);
+      add('secondwind', s.heavyTaken >= 10 ? 1 : 0, 6, `溜めた一撃（強撃など）で受けた傷: <b>${s.heavyTaken}</b>`);
       add('crossroads', this.mods.doors ? 1 : 0, 1, '扉がもう1つあれば、別の道を選べた');
       const k = summary.killer;
       if (k && k.boss && k.seals > 0) {
@@ -1309,8 +1364,8 @@ const TREE_SX = 1.12;
         add('trine', 1, 7, `灰輪の主は残り <b>${k.hp}</b>。三連をもっと重く`);
         add('pyre', s.burnDealt > 0 ? 1 : 0, 7, `燃焼で与えた傷: <b>${s.burnDealt}</b>。溜めた火を爆ぜさせれば…`);
       }
-      add('guardian', s.heavyTaken >= 15 ? 1 : 0, 8, `強撃と灰燼で受けた傷: <b>${s.heavyTaken}</b>。最大の一撃を跳ね返せたら…`);
-      add('bulwark', s.heavyTaken >= 12 ? 1 : 0, 5, `強撃で受けた傷: <b>${s.heavyTaken}</b>。盾を前のターンから積めたら…`);
+      add('guardian', s.heavyTaken >= 15 ? 1 : 0, 8, `溜めた一撃（強撃など）で受けた傷: <b>${s.heavyTaken}</b>。最大の一撃を跳ね返せたら…`);
+      add('bulwark', s.heavyTaken >= 12 ? 1 : 0, 5, `溜めた一撃（強撃など）で受けた傷: <b>${s.heavyTaken}</b>。盾を前のターンから積めたら…`);
       add('longpush', s.markHits, 2, `封じられた目を <b>${s.markHits}</b> 回出してしまった。2つ先まで届けば…`);
       add('deft', s.zeroSpark >= 4 ? s.zeroSpark : 0, 1.2, `火種が尽きていたターン: <b>${s.zeroSpark}</b>`);
       add('keeper', k && k.boss ? 1 : 0, 3, '灰輪の主の前で、灯が持ちこたえられなかった');
@@ -1318,7 +1373,7 @@ const TREE_SX = 1.12;
       add('borrow', (s.lockedTurns || 0) >= 2 || (summary.sparksLeft === 0 && s.zeroSpark >= 3) ? Math.max(s.lockedTurns || 0, s.zeroSpark) : 0, 1.5,
         `火種が尽き、回すしかなかったターン: <b>${Math.max(s.lockedTurns || 0, s.zeroSpark)}</b>。灰輪に一手を借りられたら…`);
       if ((s.enemyHealed || 0) >= 15) add('hyoshigi', Math.round(s.enemyHealed / 5), 1, `敵に取り戻されたHP: <b>${s.enemyHealed}</b>。台本の「蘇生」を飛ばせたら…`);
-      else if (s.heavyTaken >= 12) add('hyoshigi', Math.round(s.heavyTaken / 6), 1, `強撃で受けた傷: <b>${s.heavyTaken}</b>。強撃が来る時を、自分で選べたら…`);
+      else if (s.heavyTaken >= 12) add('hyoshigi', Math.round(s.heavyTaken / 6), 1, `溜めた一撃（強撃など）で受けた傷: <b>${s.heavyTaken}</b>。強撃が来る時を、自分で選べたら…`);
       if (k && k.boss && !k.seals) add('hyoshigi', 1, 6, '逆廻りの封じは、決まった順で巡ってくる。その順を自分で進められたら…');
       for (const c of cands) c.dataDriven = true;
       cands.sort((a, b) => {
@@ -1343,7 +1398,8 @@ const TREE_SX = 1.12;
         // 灰の底から: its own result (not a main-game win or death)
         const d = summary.deep;
         box.appendChild(U.el('div', 'end-title' + (d.cleared ? ' win' : ''), d.cleared ? '灰の底を越えた' : `灰の底 B${d.floor} で力尽きた`));
-        box.appendChild(U.el('div', 'end-sub', d.cleared ? '深淵の修道院長を討った。（灰の底からの挑戦・本編の記録には付かない）' : '灰の底からの挑戦。本編の記録には付かない。'));
+        box.appendChild(U.el('div', 'end-sub', d.cleared ? `${SD.UI.deepEliteName()}を討った。（灰の底からの挑戦・本編の記録には付かない）` : '灰の底からの挑戦。本編の記録には付かない。'));
+        if (res.firstDeepElite) box.appendChild(U.el('div', 'win-note deep', `<b>${SD.UI.deepEliteName()}を初めて討った。</b>灰の底の鐘は、もう鳴らない。`));
         const k = summary.killer;
         if (k && !d.cleared) {
           const kb = U.el('div', 'killer');
@@ -1362,7 +1418,7 @@ const TREE_SX = 1.12;
         cell('最大の一撃', st.maxHit);
         cell('灯した灯紋', `${lit} / ${all}`);
         box.appendChild(grid);
-        if (summary.deep) box.appendChild(U.el('div', 'win-note deep', summary.deep.cleared ? '<b>灰の底を越えた。</b>深淵の修道院長を討った。' : `<b>灰の底 B${summary.deep.floor} で力尽きた。</b>灰輪の主を討った勝利は、そのまま残る。`));
+        if (summary.deep) box.appendChild(U.el('div', 'win-note deep', summary.deep.cleared ? `<b>灰の底を越えた。</b>${SD.UI.deepEliteName()}を討った。${res.firstDeepElite ? '灰の底の鐘は、もう鳴らない。' : ''}` : `<b>灰の底 B${summary.deep.floor} で力尽きた。</b>灰輪の主を討った勝利は、そのまま残る。`));
         else if (st.bossKills <= 1) box.appendChild(U.el('div', 'win-note', '最初は祈るだけだった灯輪を、三人はいま自分の手で廻している。<br>灯紋はまだ残っている――別の道で、もう一度深淵へ。'));
         if (!summary.settled && st.wins === 1) box.appendChild(U.el('div', 'win-note deep', '<b>灰の底が開いた。</b>次の挑戦から、灰輪の主を倒した先へ降りられる。<br>近道「第三層から（B9）」も開いた。'));
       } else {
@@ -1387,6 +1443,7 @@ const TREE_SX = 1.12;
       if (res.firstAbbot) rec.appendChild(U.el('span', 'chip new', '近道で選べる遺物 +1'));
       if (res.newDeepBest) rec.appendChild(U.el('span', 'chip new', `灰の底 最深 B${summary.floor}`));
       if (res.firstDeepClear) rec.appendChild(U.el('span', 'chip new', '灰の底 初踏破'));
+      if (res.firstDeepElite) rec.appendChild(U.el('span', 'chip new', `${SD.UI.deepEliteName()} 初撃破`));
       if (!summary.deep && summary.floor > prev.last && prev.last > 0) rec.appendChild(U.el('span', 'chip up', `前回より ${summary.floor - prev.last} 階深く`));
       if (summary.stats.triples) rec.appendChild(U.el('span', 'chip', `三連 ${summary.stats.triples}`));
       box.appendChild(rec);
@@ -1402,9 +1459,10 @@ const TREE_SX = 1.12;
       const total = summary.embers; let shown = 0;
       const tick = () => { shown = Math.min(total, shown + Math.max(1, Math.ceil(total / 30))); cnt.textContent = '+' + shown; if (SD.Audio && shown % 3 === 0) SD.Audio.play('ember', { vol: 0.4 }); if (shown < total) setTimeout(tick, 28); };
       setTimeout(tick, 300);
-      // whisper + node
+      // whisper + node — only after a fall (a 灰の底-only run is never a "win", but clearing B16 is not a fall either)
+      const fell = !summary.won && !(summary.deep && summary.deep.cleared);
       let primaryAction = null;
-      if (!summary.won) {
+      if (fell) {
         const w = this.pickWhisper(summary);
         p.seen.lastWhisper = w && w.dataDriven ? w.node : null;
         G.save();
@@ -1422,20 +1480,23 @@ const TREE_SX = 1.12;
           if (can && w.dataDriven) primaryAction = { label: `【${n.name}】を灯して再挑戦`, fn: () => { SD.Meta.unlock(p, n.id); G.save(); if (SD.Audio) SD.Audio.play('unlock'); G.setScreen(new RunScreen({ startFloor: this.defaultStart() })); } };
         }
       }
+      // The buttons, the same shape after every fall: [灯して再挑戦 (when the whispered node can be lit)] [灯紋の輪へ]
+      // [すぐ再挑戦 (small: the same start, nothing lit)]. A 灰の底 result without that offer leads with 灰の底から再挑戦
+      // (a brand-new run: nothing carried over, the B13 kit chosen again).
       const btns = U.el('div', 'end-btns');
-      const camp = U.button('灯紋の輪へ', primaryAction ? 'secondary' : 'primary big', () => G.setScreen(new CampScreen()));
-      if (primaryAction) {
-        const pb = U.button(primaryAction.label + ' <kbd>Space</kbd>', 'primary big', primaryAction.fn, { silent: true });
-        btns.appendChild(pb);
-        this.endPrimary = pb;
-      } else this.endPrimary = camp;
-      // 灰の底 result: retry 灰の底 at once — a brand-new run (nothing carried over), the B13 kit is chosen again
-      if (summary.deep && SD.Meta.computeMods(p).shortcuts.indexOf(13) >= 0) {
-        const dr = U.button('灰の底から再挑戦 <small>B13・新しい支度から</small>', primaryAction ? 'secondary' : 'primary big', () => G.setScreen(new RunScreen({ startFloor: 13 })), { silent: true });
-        if (!primaryAction) { btns.insertBefore(dr, btns.firstChild); this.endPrimary = dr; camp.className = camp.className.replace('primary big', 'secondary'); } else btns.appendChild(dr);
-      }
+      const deepRetry = !!summary.deep && SD.Meta.computeMods(p).shortcuts.indexOf(13) >= 0;
+      let lead = null;
+      if (primaryAction) lead = U.button(primaryAction.label + ' <kbd>Space</kbd>', 'primary big', primaryAction.fn, { silent: true });
+      else if (deepRetry) lead = U.button('灰の底から再挑戦 <small>B13・新しい支度から</small>', 'primary big', () => G.setScreen(new RunScreen({ startFloor: 13 })), { silent: true });
+      const camp = U.button('灯紋の輪へ', lead ? 'secondary' : 'primary big', () => G.setScreen(new CampScreen()));
+      if (lead) btns.appendChild(lead);
       btns.appendChild(camp);
-      if (!summary.won && !summary.deepOnly) btns.appendChild(U.button('すぐ再挑戦', 'mini', () => G.setScreen(new RunScreen({ startFloor: this.defaultStart() }))));
+      this.endPrimary = lead || camp;
+      // a 灰の底-only fall that already leads with 灰の底から再挑戦 needs no second retry button
+      if (fell && (primaryAction || !summary.deepOnly)) {
+        const sf = this.defaultStart();
+        btns.appendChild(U.button(summary.deepOnly ? `すぐ再挑戦（B${sf}から）` : 'すぐ再挑戦', 'mini', () => G.setScreen(new RunScreen({ startFloor: sf }))));
+      }
       box.appendChild(btns);
       m.appendChild(box);
       this.endInputLock = performance.now() + 1000;
@@ -1528,7 +1589,7 @@ const TREE_SX = 1.12;
       const P = act ? run.previewAfter(act) : null;
       if (!P) { this.hoverPreview = null; this.hoverPrev = null; this.renderLeft(run.forecast()); return; }
       this.hoverPreview = P.R;
-      this.hoverPrev = { R: P.R, turn: P.turn, band: SD.UI.bandVisible(run) ? P.band : null, caption: null };
+      this.hoverPrev = { R: P.R, turn: P.turn, band: SD.UI.bandVisible(run) ? P.band : null, caption: null, fires: P.fires };
       this.renderLeft(P.R, label, P.turn);
     }
 
@@ -1731,7 +1792,8 @@ const TREE_SX = 1.12;
       const hp = this.hoverPrev && this.hoverPrev.band ? this.hoverPrev : null;
       this.scene.drawHud(ctx, { V: this.V, showPartyBar: true, showEnemyBar: !!this.scene.enemy && !!this.V.enemy, ghostPct,
         intent: hp && hp.intentI ? Object.assign({}, hp.intentI, { born: null }) : this.intent,
-        band: hp ? hp.band : this.band, bandCaption: hp ? hp.caption : null, bandSlide: this.bandSlide, run: this.run, script: !!this.run.mods.script });
+        band: hp ? hp.band : this.band, bandCaption: hp ? hp.caption : null, bandSlide: this.bandSlide, run: this.run, script: !!this.run.mods.script,
+        hudRects: () => this.hudRects(), intentBoxSink: (b) => { this.intentBox = b; } }); // (QA-001: keep the plaque clear of the HUD)
       // device band background
       SD.StageDraw.drawApron(ctx, this.scene.time);
       this.reels.draw(ctx, st);

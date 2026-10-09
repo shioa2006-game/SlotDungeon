@@ -366,12 +366,21 @@
       await this.wait(0.8);
     }
 
-    async on_stagger() {
+    async on_stagger(ev) {
       const p = this.enemyFx();
-      SD.FX.text(p.x, p.y - 80, '怯んだ！', { color: '#9fe8ff', size: 30, vy: -30 });
+      if (ev && ev.by === 'break') {
+        // 灰鐘の番人: the shell broke under the hits, and with it the 構え
+        SD.FX.burst(p.x, p.y - 50, 26, { color: ['#a89c9e', '#ff7a3a', '#fff6d8'], kind: 'chunk', speed: 320 });
+        SD.FX.ring(p.x, p.y - 50, { r1: 150, color: '#ffb36a', width: 6 });
+        SD.FX.text(p.x, p.y - 150, '殻を割った！', { color: '#ffcf8a', size: 32, vy: -24, sub: '構えが崩れた' });
+        SD.FX.shake(6);
+        this.sfx('seal_break');
+      } else {
+        SD.FX.text(p.x, p.y - 80, '怯んだ！', { color: '#9fe8ff', size: 30, vy: -30 });
+        this.sfx('block');
+      }
       if (this.rs.scene.enemy) { this.rs.scene.enemy.setHold(null); this.rs.scene.enemy.play('hit', 0.5); }
-      this.sfx('block');
-      await this.wait(0.25);
+      await this.wait(ev && ev.by === 'break' ? 0.45 : 0.25);
     }
 
     async on_act(ev) {
@@ -635,9 +644,10 @@
       await this.wait(0.3);
     }
     async on_stunned() { const p = this.enemyFx(); SD.FX.text(p.x, p.y - 90, '動けない！', { color: '#ffe68a', size: 30 }); await this.wait(0.4); }
-    async on_staggerCancel() {
+    async on_staggerCancel(ev) {
       const p = this.enemyFx();
-      SD.FX.text(p.x, p.y - 90, '強撃は不発', { color: '#9fe8ff', size: 28, sub: SD.UI.bandVisible(this.rs.run) ? '台本から消えた' : null });
+      const brk = SD.UI.breaksStance(this.rs.run);
+      SD.FX.text(p.x, p.y - 90, brk ? `${(ev && ev.skipped && ev.skipped.label) || '大鐘'}は崩れた` : '強撃は不発', { color: '#9fe8ff', size: 28, sub: SD.UI.bandVisible(this.rs.run) ? '台本から消えた' : null });
       if (SD.UI.bandVisible(this.rs.run)) this.rs.bandSlide = 1;
       await this.wait(0.35);
     }
@@ -717,7 +727,7 @@
       this.sfx('victory');
       SD.FX.flash('rgba(255,240,200,1)', 0.6, 0.8);
       for (const h of this.rs.scene.heroList()) h.play('cheer', 1.2);
-      SD.FX.banner('灰の底を越えた', { sub: '深淵の修道院長を討った', size: 54, life: 3 });
+      SD.FX.banner('灰の底を越えた', { sub: `${SD.UI.deepEliteName()}を討った`, size: 54, life: 3 });
       await this.wait(2.2);
     }
   }

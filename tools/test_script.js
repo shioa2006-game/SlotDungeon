@@ -3,6 +3,7 @@
  *   node tools/test_script.js            (all)
  *   node tools/test_script.js unit       (unit tests only)
  *   node tools/test_script.js regress [runs]
+ *   node tools/test_script.js bell [fights]  灰鐘の番人: the 構え / 大鐘 previews against random play (sends, borrows, 連鎖)
  * The regression baseline is the vertical-slice commit (git 89b29f1); it is loaded side by side in its own VM context. */
 'use strict';
 const path = require('path');
@@ -570,7 +571,7 @@ function unit() {
     }
     eq(met.map((x) => x[0]), [13, 14, 15, 16], 'floors 13–16 in order');
     eq(met.slice(0, 2).map((x) => x[1]), r.deep.order, 'B13 / B14: the two new enemies, once each');
-    eq(met[3][1], 'abbot_deep', 'B16: the elite');
+    eq(met[3][1], 'bellkeeper', 'B16: the elite (灰鐘の番人)');
     const fin = r.summary;
     ok(r.phase === 'won' && fin.won && fin.deep && fin.deep.cleared && fin.deep.floor === 16, 'B16 cleared: a won, settled run with the descent result');
     // the profile: the UI path (settle, then the descent delta) == one-shot apply; embers counted once
@@ -594,6 +595,121 @@ function unit() {
     const p3 = SD.Meta.newProfile(); p3.stats.wins = 1;
     SD.Meta.applyFinishedRun(p3, sd);
     eq([p3.stats.runs, p3.stats.wins, p3.stats.deaths, p3.stats.deepRuns, p3.stats.deepClears, p3.embers], [1, 2, 0, 1, 0, f.embers], 'fallen: no death, no clear; embers once');
+  }
+
+  section('灰の底 B16 (stage 3b): 灰鐘の番人 — the 構え breaks to hits through the shell, or to two wards');
+  {
+    const ids = ['nudge', 'respin', 'hyoshigi', 'borrow'];
+    // a 灰鐘の番人 fight standing at a chosen script cell, shell and seal (heart sealed: blades and flames act)
+    const at = (cursor, block, opts = {}) => {
+      const r = fightRun(SD, opts.ids || ids, 'bellkeeper', 16, { sparks: opts.sparks == null ? 3 : opts.sparks, hp: 90, seed: opts.seed });
+      const e = r.enemy;
+      e.cursor = cursor; e.mirrorSym = opts.seal || 'heart'; e.intent = r._readCell(e); e.now = e.intent.now; e.block = block;
+      return r;
+    };
+    const s0 = fightRun(SD, ids, 'bellkeeper', 16, {});
+    eq([s0.enemy.hp, s0.enemy.block, s0.enemy.intent.label, s0.enemy.intent.now.sym], [400, 150, '打ち据え', s0.mostStocked()], 'turn 1: shell 150 and the most carved symbol sealed');
+    eq(s0.scriptBand().cells.map((x) => [x.it.label, x.it.guard || 0]), [['打ち据え', 10], ['殻を張る', 60], ['大鐘の構え', 0]], 'band: 打ち据え +10, 殻を張る +60, then the 構え');
+    // break: a blade trine (30) through a 20 shell on the 構え turn
+    const a = at(2, 20);
+    a.spin(); setPayline(a, ['blade', 'blade', 'blade']);
+    const Fa = a.forecast(), Pa = a.previewTurn(), Ba = a.scriptBand();
+    ok(Fa.staggerBreak && !Fa.staggerWard && Fa.stagger && Fa.shellNeed === 0, 'forecast: the hits break through (shellNeed 0)');
+    ok(Pa.skipped && Pa.skipped.label === '大鐘' && Ba.cells.some((c) => c.role === 'skip'), 'preview + band: 大鐘 struck out');
+    const eva = a.resolve();
+    const iSt = eva.findIndex((x) => x.t === 'stagger'), iHit = eva.findIndex((x) => x.t === 'act' && x.sym === 'blade');
+    ok(iSt > iHit && eva[iSt].by === 'break', 'the break shows after the hits (by: break)');
+    ok(eva.some((x) => x.t === 'staggerCancel') && !eva.some((x) => x.t === 'enemyAttack' && x.heavy), '大鐘 is struck from the script');
+    eq([a.enemy.intent.label, a.enemy.hp], ['打ち据え', 400 - 10], 'next comes 打ち据え; 10 of 30 reached the body');
+    // not enough: 30 into a 60 shell — the stance holds and 大鐘 comes
+    const b = at(2, 60);
+    b.spin(); setPayline(b, ['blade', 'blade', 'blade']);
+    const Fb = b.forecast();
+    ok(!Fb.stagger && Fb.shellNeed === 31, 'forecast: 31 more needed');
+    b.resolve();
+    eq([b.enemy.intent.label, b.enemy.intent.heavy, b.enemy.hp], ['大鐘', true, 400], 'the stance held: 大鐘 next, nothing reached the body');
+    b.spin(); setPayline(b, ['lantern', 'lantern', 'lantern']);
+    const evb = b.resolve();
+    ok(evb.some((x) => x.t === 'enemyAttack' && x.heavy && x.raw === 40), '大鐘 40 lands');
+    // exactly the shell: nothing reaches the body, no break
+    const c = at(2, 30);
+    c.spin(); setPayline(c, ['blade', 'blade', 'blade']);
+    ok(!c.forecast().stagger && c.forecast().shellNeed === 1, 'exactly the shell (30 vs 30): no break, 1 more needed');
+    // no shell left (e.g. 殻を張る was sent away): a single blade reaching the body breaks it
+    const d = at(2, 0);
+    d.spin(); setPayline(d, ['blade', 'lantern', 'heart']);
+    ok(d.forecast().staggerBreak, 'no shell: any direct hit that lands breaks the stance');
+    // two wards: the old stagger, shown before the hits
+    const w = at(2, 60);
+    w.spin(); setPayline(w, ['ward', 'ward', 'lantern']);
+    const Fw = w.forecast();
+    ok(Fw.staggerWard && !Fw.staggerBreak, 'two wards: a ward stagger');
+    const evw = w.resolve();
+    ok(evw.find((x) => x.t === 'stagger') && !evw.find((x) => x.t === 'stagger').by && evw.some((x) => x.t === 'staggerCancel'), 'two wards: staggered, 大鐘 struck out');
+    // wards and a break together: one stagger
+    const wb = at(2, 0);
+    wb.spin(); setPayline(wb, ['ward', 'ward', 'blade']);
+    const evwb = wb.resolve();
+    eq(evwb.filter((x) => x.t === 'stagger').length, 1, 'wards + break: one stagger');
+    // what does not break the shell: burn ticks, a reaper (死神)
+    const g = at(2, 60);
+    g.enemy.burn = 30;
+    g.spin(); setPayline(g, ['lantern', 'lantern', 'heart']);
+    const evg = g.resolve();
+    ok(!evg.some((x) => x.t === 'staggerCancel') && g.enemy.intent.label === '大鐘', 'burn goes round the shell: the stance holds');
+    const rp = at(2, 60);
+    rp.spin(); setPayline(rp, ['skull', 'skull', 'skull']);
+    ok(rp.forecast().reaper > 0 && !rp.forecast().stagger, '死神 goes round the shell: no break');
+    // the pact's skulls are direct hits: the shell takes them, and they can break it
+    const sp = at(2, 5, { ids: ids.concat(['kindle', 'skullpact']) });
+    sp.spin(); setPayline(sp, ['skull', 'skull', 'lantern']);
+    ok(sp.forecast().staggerBreak, '髑髏の契約: 10 into a 5 shell breaks it');
+    // only on the 構え turn
+    const n = at(1, 10);
+    n.spin(); setPayline(n, ['blade', 'blade', 'blade']);
+    ok(!n.forecast().stagger, '殻を張る turn: hits through the shell do nothing to the script');
+    // 台本送り: send 殻を張る away — the 構え comes now behind the thin 打ち据え shell (10), and a pair (12) breaks it
+    const h = at(1, 10);
+    h.spin(); setPayline(h, ['blade', 'blade', 'lantern']);
+    h.advance();
+    eq([h.enemy.intent.label, h.enemy.block], ['大鐘の構え', 10], 'sent: the 構え is now, behind the old 10 shell');
+    const Ph = h.previewTurn();
+    ok(h.forecast().staggerBreak && Ph.skipped && Ph.skipped.label === '大鐘', 'sent: the forecast and preview see the break');
+    const evh = h.resolve();
+    ok(evh.some((x) => x.t === 'stagger' && x.by === 'break') && evh.some((x) => x.t === 'staggerCancel') && h.enemy.intent.label === '打ち据え', 'sent: broken, 大鐘 struck out');
+    // 借り火 on the 構え turn: broken, then the debt takes the cell after 大鐘 — exactly as previewed
+    const br = at(2, 20, { sparks: 0 });
+    br.spin(); br.borrow(); setPayline(br, ['blade', 'blade', 'blade']);
+    const Pbr = br.previewTurn(), Bbr = br.scriptBand();
+    const evbr = br.resolve();
+    const dA = evbr.find((x) => x.t === 'debtAction');
+    ok(Pbr.skipped && Pbr.debt && dA && JSON.stringify(strip(Pbr.debt)) === JSON.stringify(strip(dA.intent)) && dA.intent.label === '打ち据え', 'borrow + break: 大鐘 struck, the debt is 打ち据え (as previewed)');
+    eq(br.enemy.intent.label, '殻を張る', 'borrow + break: then 殻を張る');
+    eq(Bbr.cells.map((x) => x.role), ['now', 'skip', 'debt', 'next', 'next2'], 'borrow + break: the band shows skip and debt');
+    // 借り火 the turn before: 殻を張る and the 構え both play now — there is no 構え turn to break, 大鐘 comes
+    const bb = at(1, 10, { sparks: 0 });
+    bb.spin(); bb.borrow(); setPayline(bb, ['lantern', 'lantern', 'heart']);
+    const Pbb = bb.previewTurn();
+    bb.resolve();
+    ok(Pbb.debt && Pbb.debt.label === '大鐘の構え' && bb.enemy.intent.label === '大鐘' && bb.enemy.block === 60, 'borrow before: the 構え is played with the debt, 大鐘 next behind the 60 shell');
+    // 連鎖: the first line chips the shell (30 of 40), the bonus line breaks the rest — judged on both lines together
+    const ch = at(2, 40, { ids: ids.concat(['whet', 'bond', 'kindle', 'execute', 'pyre', 'twin', 'trine', 'chain', 'momentum']) });
+    ch.mods = Object.assign({}, ch.mods, { bladeBonus: 0, trineMult: 2.5, pairMult: 1.5, burnPerFlame: 0, execute: false }); // keep the numbers simple
+    ch.spin(); setPayline(ch, ['blade', 'blade', 'blade']);
+    const Fch = ch.forecast(), Pch = ch.previewTurn();
+    ok(!Fch.stagger && Pch.chain && Pch.random, '連鎖 armed: the first line alone does not break; the preview says the bonus spin decides');
+    const want = ['blade', 'blade', 'lantern'];
+    const q = ch.reels.map((r, i) => r.strip.findIndex((x) => x.s === want[i] && !x.temp));
+    const realInt = ch.rng.int.bind(ch.rng); let qi = 0;
+    ch.rng.int = (m) => (qi < 3 ? q[qi++] : realInt(m));
+    const evch = ch.resolve();
+    ok(evch.some((x) => x.t === 'chain') && evch.some((x) => x.t === 'stagger' && x.by === 'break') && evch.some((x) => x.t === 'staggerCancel'), '連鎖: the bonus line (12) breaks the 10 left — 大鐘 struck out');
+    // records: the elite's kill is its own; the stage 3a stand-in's kills never count as its first kill
+    const pk = SD.Meta.newProfile(); pk.stats.eliteKills.abbot_deep = 3;
+    const dres = (kills) => ({ floor: 16, stats: { maxHit: 0 }, deep: { floor: 16, cleared: true, embers: 0, kills: 1, triples: 0, bonds: 0, eliteKills: kills } });
+    const r1 = SD.Meta.applyDeepResult(pk, dres(['bellkeeper']));
+    const r2 = SD.Meta.applyDeepResult(pk, dres(['bellkeeper']));
+    ok(r1.firstDeepElite && !r2.firstDeepElite && pk.stats.eliteKills.bellkeeper === 2 && pk.stats.eliteKills.abbot_deep === 3, 'first kill flagged once; the stand-in kills are kept but separate');
   }
 
   section('灰の底への入り口 (stage 3a+): 第三層から / 灰の底から');
@@ -744,6 +860,96 @@ function unit() {
     eq(oddsOk, oddsN, '再演 odds == brute force over the strips (the resolve\'s own judgement)');
   }
 
+  section('QA audit 1 (2026-10-09): the manipulation that fires the turn; which moment the enemy-HP forecast is');
+  {
+    // a payline 癒・癒・剣 where reel 2's 癒 can be nudged to a 剣, and reel 1's 癒 also sits next to a 剣
+    const setup = (ids, sparks) => {
+      const r = fightRun(SD, ids, 'moth', 5, { sparks, hp: 40 });
+      r.spin();
+      const at = (ri, s, nb) => r.reels[ri].strip.findIndex((c, k, a) => c.s === s && (!nb || a[(k + 1) % a.length].s === nb || a[(k - 1 + a.length) % a.length].s === nb));
+      r.reels[0].pos = at(0, 'heart', 'blade'); r.reels[1].pos = at(1, 'heart', 'blade'); r.reels[2].pos = at(2, 'blade');
+      r.reels.forEach((x) => { x.echo = null; x.held = false; });
+      const d = [-1, 1].find((k) => r.cellAt(1, k).s === 'blade');
+      return { r, d, act: (c) => c.nudge(1, d) };
+    };
+    // Dots' case: the last spark goes on the nudge, nothing is left to do — the nudge fires the turn
+    const A = setup(['nudge'], 1);
+    const PA = A.r.previewAfter(A.act);
+    ok(PA && PA.fires === true, 'last spark, nothing left: the hover preview says this nudge fires the turn');
+    A.r.nudge(1, A.d);
+    ok(A.r.sparks === 0 && !A.r.needsDecision() && A.r.firesAfterManip(), '…and after the nudge it does (same rule)');
+    // a borrowed spark would still complete a 剣 trine: the turn waits, and the preview does not promise a fire
+    const B = setup(['nudge', 'borrow'], 1);
+    const PB = B.r.previewAfter(B.act);
+    B.r.nudge(1, B.d);
+    ok(PB.fires === false && B.r.canBorrow() && B.r.borrowWorthwhile() && !B.r.firesAfterManip(), '借り火 still worth it: no fire, no "この操作で発動"');
+    // the free first 再演 is still there
+    const C = setup(['nudge', 'respin'], 1);
+    ok(C.r.previewAfter(C.act).fires === false, 'a free 再演 left: no fire');
+    // a trine with sparks left: early game it fires at once; with 継ぎ留め (combo pause) it waits
+    const tri = (ids) => {
+      const r = fightRun(SD, ids, 'moth', 5, { sparks: 3, hp: 40 });
+      r.spin();
+      r.reels[0].pos = r.reels[0].strip.findIndex((c) => c.s === 'blade');
+      r.reels[2].pos = r.reels[2].strip.findIndex((c) => c.s === 'blade');
+      r.reels[1].pos = r.reels[1].strip.findIndex((c, k, a) => c.s !== 'blade' && (a[(k + 1) % a.length].s === 'blade' || a[(k - 1 + a.length) % a.length].s === 'blade'));
+      const d = [-1, 1].find((k) => r.cellAt(1, k).s === 'blade');
+      return r.previewAfter((c) => c.nudge(1, d)).fires;
+    };
+    ok(tri(['nudge']) === true, 'a nudge that makes a trine fires it (early game)');
+    ok(tri(['nudge', 'respin', 'stasis']) === false, '…but waits once the combo pause is on (継ぎ留め)');
+    // the rule is the UI flow it replaced: (trine/bond/quad or nothing left) → shouldAutoResolve, over random states
+    const oldFlow = (r) => {
+      if (r.phase !== 'spun') return false;
+      const R = r.forecast();
+      const great = R.combos.some((c) => c.k === 'trine' || c.k === 'bond' || c.k === 'quad');
+      if (!(great || !r.needsDecision())) return false;
+      if (r.awaken.ready) return false;
+      return r.shouldAutoResolve();
+    };
+    const pick = SD.Util.makeRng(4321);
+    let same = 0, tries = 0, preview = 0;
+    for (let n = 0; n < 300; n++) {
+      const ids = SD.Data.SKILLS.filter(() => pick.chance(0.5)).map((s) => s.id).concat(['nudge']);
+      const r = fightRun(SD, ids, pick.pick(['moth', 'sentry', 'abbot', 'golem', 'husk', 'mirror', 'bellkeeper']), pick.pick([5, 8, 10, 13]), { sparks: pick.int(4), hp: 40, seed: 900 + n });
+      r.spin();
+      tries++; if (r.firesAfterManip() === oldFlow(r)) same++;
+      const i = pick.int(3), d = pick.chance(0.5) ? 1 : -1;
+      if (!r.canNudge(i, d)) continue;
+      const P = r.previewAfter((c) => c.nudge(i, d));
+      r.nudge(i, d);
+      if (P && r.phase === 'spun') { preview++; tries++; if (P.fires === r.firesAfterManip() && r.firesAfterManip() === oldFlow(r)) same++; }
+    }
+    eq(same, tries, `random states: firesAfterManip == the old UI flow, and the hover preview == what happens (${preview} nudges)`);
+
+    // QA-003: the enemy HP right after the 発動, then its own turn — 骨の修道院長's 蘇生 (+10) after 12 damage
+    const h = fightRun(SD, ['nudge'], 'abbot', 8, { sparks: 2, hp: 40 });
+    const e = h.enemy;
+    e.hp = 138; e.cursor = 3; e.intent = h._readCell(e); e.now = e.intent.now || null;
+    h.spin(); setPayline(h, ['blade', 'heart', 'lantern']);
+    h.reels.forEach((x) => { x.echo = null; });
+    const T = h.previewTurn();
+    const strike = T.strikeHp, ev = h.resolve();
+    const atTurn = (() => { let hp = 138; for (const x of ev) { if (x.t === 'enemyTurn') break; if (x.t === 'act' && x.sym === 'blade') hp = x.hp; } return hp; })();
+    eq([strike, T.healed, T.enemyAfter.hp, e.hp], [atTurn, 10, Math.min(e.maxHp, atTurn + 10), Math.min(e.maxHp, atTurn + 10)], '蘇生: "発動後" is the HP at the end of the 発動, "敵の番の後" adds the heal — both as it happens');
+    // burn takes the last HP at the start of the enemy turn
+    const b = fightRun(SD, ['nudge'], 'moth', 5, { sparks: 2, hp: 40 });
+    b.enemy.hp = 9; b.enemy.burn = 12;
+    b.spin(); setPayline(b, ['lantern', 'lantern', 'heart']);
+    const Tb = b.previewTurn();
+    const evb = b.resolve();
+    ok(Tb.strikeHp === 9 && Tb.diesBy === 'burn' && Tb.burnTick === 12 && evb.some((x) => x.t === 'enemyDie') && evb.findIndex((x) => x.t === 'burnTick') < evb.findIndex((x) => x.t === 'enemyDie'), 'burn kill: 発動後 9, then the burn at the start of its turn takes it');
+    // a shell in front of a 死神: the reaper goes round it — the exact preview knows (the old estimate showed no damage)
+    const s = fightRun(SD, ['nudge'], 'husk', 13, { sparks: 2, hp: 80 });
+    s.enemy.hp = 200; s.enemy.block = 60;
+    s.spin(); setPayline(s, ['skull', 'skull', 'skull']);
+    const Ts = s.previewTurn(), Rs = s.forecast();
+    const oldEst = Math.max(0, 200 - Math.max(0, Rs.totalDmg - 60));
+    const evs = s.resolve();
+    const rp = evs.find((x) => x.t === 'reaper');
+    ok(rp && Ts.strikeHp === rp.hp && Ts.strikeHp === 200 - Rs.reaper && oldEst === 200, `死神 through a shell: 発動後 ${Ts.strikeHp} (exact), where the old estimate said ${oldEst}`);
+  }
+
   section('save / load: old saves load, new fields default safely');
   {
     const store = {};
@@ -799,8 +1005,18 @@ function regress(N) {
   const evProj = (evs) => JSON.stringify(evs, (k, v) => (NEW_FIELDS.has(k) ? undefined : v))
     .replace(/,"cost":"spark"(?=[,}])/g, '');
   const firstDiff = (a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return i; };
-  let mismatches = 0, steps = 0, wildStops = 0;
-  const hasWild = (run) => run.reels.some((r) => r.strip.some((c) => c.s === 'wild') || (r.echo && r.echo.s === 'wild'));
+  // The 星 rule changed on purpose (2026-10-09): evaluate() / _isGreat() judge a 星 differently, and the hints read the
+  // cells a nudge can reach (±2). A run is compared step by step past any 星 on the reels; only when the two builds part
+  // while a 星 sits on the payline or within reach of it (this step or the one before) is the run counted as parted by
+  // the intended change, and its comparison ends there. Any other difference is a regression.
+  let mismatches = 0, steps = 0, wildStops = 0, wildSteps = 0;
+  const wildNear = (run) => run.reels.some((r) => {
+    if (r.echo && r.echo.s === 'wild') return true;
+    const L = r.strip.length;
+    for (let d = -2; d <= 2; d++) if (r.strip[((r.pos + d) % L + L) % L].s === 'wild') return true;
+    return false;
+  });
+  const hasWild = (run) => run.reels.some((r) => r.strip.some((c) => c.s === 'wild'));
   for (let n = 0; n < N; n++) {
     const pr = A.Meta.newProfile();
     pr.stats.runs = pick.int(10);
@@ -812,13 +1028,14 @@ function regress(N) {
     const ra = new A.Run(A.Meta.computeMods(JSON.parse(JSON.stringify(pr))), { seed, startFloor: start });
     const rb = new Bc.Run(Bc.Meta.computeMods(JSON.parse(JSON.stringify(pr))), { seed, startFloor: start });
     let ea = ra.begin(), eb = rb.begin();
-    let guard = 0;
+    let guard = 0, nearBefore = false;
     while (guard++ < 3000) {
-      // a 星 on the reels (e.g. the 星屑の小瓶 relic): the 星 rule differs from the base on purpose — stop comparing this run
-      if (hasWild(ra) || hasWild(rb)) { wildStops++; break; }
       steps++;
+      const near = nearBefore || wildNear(ra) || wildNear(rb);
+      if (hasWild(ra) || hasWild(rb)) wildSteps++;
       const pa = proj(ra), pb = proj(rb);
       if (JSON.stringify(pa) !== JSON.stringify(pb) || evProj(ea) !== evProj(eb)) {
+        if (near) { wildStops++; break; } // parted by the intended 星 rule
         mismatches++;
         if (mismatches <= 3) {
           console.log(`  ✗ run ${n} seed ${seed} step ${guard} diverged`);
@@ -829,7 +1046,8 @@ function regress(N) {
         break;
       }
       if (ra.phase === 'dead' || ra.phase === 'won') break;
-      // the same random legal action on both
+      // the same random legal action on both (a 星 within reach now may make this action part the two builds)
+      nearBefore = wildNear(ra) || wildNear(rb);
       const ph = ra.phase;
       if (ph === 'idle') { ea = ra.spin(); eb = rb.spin(); }
       else if (ph === 'spun') {
@@ -838,10 +1056,11 @@ function regress(N) {
         };
         const legalB = { respin: rb.canRespin(), nudge: rb.canNudgeAny(), bless: rb.canBlessAny(), echo: rb.canEchoAny(), key: rb.canFateKey(), hold: rb.mods.holdMax > 0 };
         if (JSON.stringify(legal) !== JSON.stringify(legalB)) { mismatches++; console.log('  ✗ legal actions differ', JSON.stringify(legal), JSON.stringify(legalB)); break; }
-        if (ra.needsDecision() !== rb.needsDecision()) { mismatches++; console.log('  ✗ needsDecision differs'); break; }
+        const nearNow = wildNear(ra) || wildNear(rb);
+        if (ra.needsDecision() !== rb.needsDecision()) { if (nearNow) { wildStops++; break; } mismatches++; console.log('  ✗ needsDecision differs'); break; }
         // auto-resolve is unchanged once the (intended) combo pause of 継ぎ留め owners is switched off
         rb.mods.comboPause = false;
-        if (ra.shouldAutoResolve() !== rb.shouldAutoResolve()) { mismatches++; console.log('  ✗ shouldAutoResolve differs'); break; }
+        if (ra.shouldAutoResolve() !== rb.shouldAutoResolve()) { if (nearNow) { wildStops++; break; } mismatches++; console.log('  ✗ shouldAutoResolve differs'); break; }
         const k = pick.int(9);
         if (k === 0 && legal.respin) { const m = [0, 1, 2].filter(() => pick.chance(0.4)); for (const i of m) { ra.toggleHold(i); rb.toggleHold(i); } ea = ra.respin(); eb = rb.respin(); }
         else if (k === 1 && legal.nudge) { const i = pick.int(3), d = pick.chance(0.5) ? 1 : -1; ea = ra.nudge(i, d); eb = rb.nudge(i, d); }
@@ -863,8 +1082,8 @@ function regress(N) {
       } else break;
     }
   }
-  ok(mismatches === 0, `identical play without the new 灯紋 (${mismatches} diverged runs, ${steps} steps compared; ${wildStops} runs stopped at a 星, whose rule changed on purpose)`);
-  console.log(`  compared ${steps} steps over ${N} runs; ${wildStops} runs stopped at a 星 (its rule changed on purpose)`);
+  ok(mismatches === 0, `identical play without the new 灯紋 (${mismatches} diverged runs, ${steps} steps compared; ${wildStops} runs parted where a 星 was in reach — its rule changed on purpose)`);
+  console.log(`  compared ${steps} steps over ${N} runs (${wildSteps} of them with a 星 on the reels); ${wildStops} runs parted where a 星 was in reach (its rule changed on purpose)`);
 }
 function SD_rng(seed) { const S = currentSD(); return S.Util.makeRng(seed); }
 
@@ -913,9 +1132,76 @@ function bossFuzz(N) {
   ok(bad === 0 && next2 > 100 && phases[2] > 100 && phases[3] > 100, `boss band honest across acts (${bad} mismatches)`);
 }
 
+// ================================================================== 灰鐘の番人 fuzz: the 構え breaks exactly as previewed
+// Random fights from random states (script cell, shell, seal, HP, sparks) with random play: nudges, respins, holds, 写し身,
+// 運命の鍵, 台本送り, 借り火, and 連鎖 when lit. Every resolve: the struck-out 大鐘, HP both sides and the band's next cell
+// equal the preview (unless a 連鎖 spin rolls dice); the forecast's break equals the break that happens.
+function bellFuzz(N) {
+  section(`灰鐘の番人 fuzz: ${N} fights, random states and play (sends, borrows, 連鎖)`);
+  const SD = currentSD();
+  const R = SD.Util.makeRng(1616);
+  const clean = (x) => JSON.stringify(x, (k, v) => (k === 'random' ? undefined : v));
+  let bad = 0, resolves = 0;
+  const tally = { stanceTurns: 0, brokenByHits: 0, brokenByWards: 0, held: 0, heavyLanded: 0, chainBreaks: 0, sends: 0, borrows: 0, chainTurns: 0 };
+  const fail = (msg) => { bad++; if (bad <= 5) console.log('  ✗ ' + msg); };
+  for (let n = 0; n < N; n++) {
+    const ids = SD.Data.SKILLS.filter(() => R.chance(0.5)).map((s) => s.id).concat(['nudge', 'respin']);
+    if (R.chance(0.6)) ids.push('hyoshigi'); if (R.chance(0.6)) ids.push('borrow'); if (R.chance(0.35)) ids.push('chain', 'twin', 'trine');
+    const run = fightRun(SD, ids, 'bellkeeper', 16, { seed: 700 + n });
+    const e = run.enemy;
+    e.cursor = R.int(4); e.turn = R.int(e.cursor + 1);
+    e.mirrorSym = R.pick(['blade', 'flame', 'ward', 'heart', 'lantern']);
+    e.intent = run._readCell(e); e.now = e.intent.now || null;
+    e.block = R.pick([0, 10, 60, 150, R.int(120)]);
+    e.hp = Math.max(30, Math.round(e.maxHp * (0.2 + R.next() * 0.8)));
+    run.hp = Math.max(20, Math.round(run.maxHp * (0.4 + R.next() * 0.6)));
+    run.sparks = R.int(run.maxSparks + 1);
+    for (let t = 0; t < 30 && run.phase === 'idle' && run.enemy === e; t++) {
+      run.spin();
+      for (let a = 0; a < 4 && run.phase === 'spun'; a++) {
+        const k = R.int(9);
+        if (k === 0 && run.canAdvance()) { run.advance(); tally.sends++; }
+        else if (k === 1 && run.canBorrow()) { run.borrow(); tally.borrows++; }
+        else if (k === 2 && run.canNudgeAny()) { const i = R.int(3), d = R.chance(0.5) ? 1 : -1; if (run.canNudge(i, d)) run.nudge(i, d); }
+        else if (k === 3 && run.canRespin()) { for (let i = 0; i < 3; i++) if (R.chance(0.4) && run.canHold(i)) run.toggleHold(i); run.respin(); }
+        else if (k === 4 && run.canEchoAny()) { for (let s = 0; s < 3; s++) for (let u = 0; u < 3; u++) if (run.phase === 'spun' && run.canEcho(s, u) && R.chance(0.3)) run.echo(s, u); }
+        else if (k === 5 && run.canFateKey()) { const i = R.int(3); if (run.canFateKey(i)) run.fateKey(i, R.int(run.reels[i].strip.length)); }
+      }
+      if (run.phase !== 'spun') break;
+      const it0 = e.intent, F = run.forecast(), P = run.previewTurn(), B = run.scriptBand();
+      const nx = B && B.cells.find((c) => c.role === 'next');
+      const ev = run.resolve();
+      resolves++;
+      const chained = ev.some((x) => x.t === 'chain');
+      const sk = ev.some((x) => x.t === 'staggerCancel');
+      const brk = ev.some((x) => x.t === 'stagger' && x.by === 'break');
+      const died = ev.some((x) => x.t === 'enemyDie');
+      if (chained) tally.chainTurns++;
+      if (it0.k === 'charge' && !died) {
+        tally.stanceTurns++;
+        if (sk) { if (brk) tally.brokenByHits++; else tally.brokenByWards++; if (brk && chained && !F.staggerBreak) tally.chainBreaks++; }
+        else tally.held++;
+      }
+      if (ev.some((x) => x.t === 'enemyAttack' && x.heavy)) tally.heavyLanded++;
+      if (!P.random) {
+        if (!!P.skipped !== sk) fail(`fight ${n} turn ${t}: 大鐘 struck in preview ${!!P.skipped}, actual ${sk}`);
+        if (!died && brk !== (F.staggerBreak && !F.staggerWard)) fail(`fight ${n} turn ${t}: break forecast ${F.staggerBreak} actual ${brk}`);
+        if (!(run.hp === P.hpAfter || (P.partyDies && run.phase === 'dead'))) fail(`fight ${n} turn ${t}: party HP preview ${P.hpAfter} actual ${run.hp}`);
+        if (P.enemyAfter && run.enemy === e && e.hp !== P.enemyAfter.hp) fail(`fight ${n} turn ${t}: enemy HP preview ${P.enemyAfter.hp} actual ${e.hp}`);
+        if (nx && !nx.cond && !nx.unknown && run.enemy === e && run.phase === 'idle' && clean(nx.it) !== clean(e.intent)) fail(`fight ${n} turn ${t}: band next ${clean(nx.it)} actual ${clean(e.intent)}`);
+      }
+      // a held 構え means 大鐘 next — unless a debt played it already
+      if (it0.k === 'charge' && !sk && !died && run.enemy === e && run.phase === 'idle' && !ev.some((x) => x.t === 'debtAction') && !(e.intent.heavy && e.intent.label === '大鐘')) fail(`fight ${n} turn ${t}: the 構え held but 大鐘 is not next`);
+    }
+  }
+  console.log(`  resolves ${resolves}; 構え turns ${tally.stanceTurns}: broken by hits ${tally.brokenByHits} (by the 連鎖 line ${tally.chainBreaks}), by wards ${tally.brokenByWards}, held ${tally.held}; 大鐘 landed ${tally.heavyLanded}; sends ${tally.sends}, borrows ${tally.borrows}, 連鎖 turns ${tally.chainTurns}`);
+  ok(bad === 0 && tally.brokenByHits > 50 && tally.brokenByWards > 20 && tally.held > 50 && tally.chainBreaks > 0 && tally.sends > 50 && tally.borrows > 50, `灰鐘の番人: previews == actual (${bad} mismatches)`);
+}
+
 const mode = process.argv[2] || 'all';
 if (mode === 'all' || mode === 'unit') unit();
 if (mode === 'all' || mode === 'regress') regress(+process.argv[3] || 400);
 if (mode === 'all' || mode === 'boss') bossFuzz(+process.argv[3] || 600);
+if (mode === 'all' || mode === 'bell') bellFuzz(+process.argv[3] || 1200);
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

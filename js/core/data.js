@@ -58,7 +58,7 @@
     13: { zone: 'ashdeep', type: 'battle', deepSlot: 0 },
     14: { zone: 'ashdeep', type: 'battle', deepSlot: 1 },
     15: { zone: 'ashdeep', type: 'normal', pool: ['husk', 'mirror'] },
-    16: { zone: 'ashdeep', type: 'elite', enemy: 'abbot_deep' },
+    16: { zone: 'ashdeep', type: 'elite', enemy: 'bellkeeper' },
   };
   const LAST_FLOOR = 12;
   const DEEP_FIRST_FLOOR = 13, DEEP_LAST_FLOOR = 16;
@@ -235,17 +235,20 @@
         return Object.assign({}, it, { now: { k: 'mark', sym: e.mirrorSym || run.mostStocked() } });
       },
     },
-    // stage 3a stand-in elite: the abbot's script with deeper numbers (replaced in stage 3b)
-    abbot_deep: {
-      name: '深淵の修道院長', art: 'abbot', variant: 'deep', hp: 380, armor: 0, ember: 60, zone: 'ashdeep', elite: true,
-      tip: '封じは最も多く彫った記号を狙う。ずらして外せ。',
+    // B16 elite (stage 3b, docs/EXPANSION_3B_SPEC.md): 重ね殻's shell + 返し鏡's seal, and one rule of its own —
+    // on the 構え turn, direct hits that break through the shell to the body break the stance (as two wards do), so 大鐘
+    // is struck from the script. Replaced the stage 3a stand-in (深淵の修道院長); its old kills stay in saves but open nothing.
+    bellkeeper: {
+      name: '灰鐘の番人', hp: 400, armor: 0, ember: 60, zone: 'ashdeep', elite: true, startBlock: 150, mirror: true, breakStagger: true,
+      tip: '殻をまとい、主役の記号を映し返す。大鐘の構えの間に、直撃で殻を割り切るか盾を2つ揃えれば、大鐘は崩れる。',
       ai(e, run) {
-        const step = e.cursor % 6;
-        if (step === 0 || step === 4) return { k: 'attack', v: 9, now: { k: 'mark', sym: run.mostStocked() }, label: '封じ' };
-        if (step === 1) return { k: 'attack', v: 18, label: '断罪' };
-        if (step === 2) return { k: 'hex', v: 2, label: '呪詛' };
-        if (step === 3) return { k: 'heal', v: 18, guard: 9, label: '蘇生' };
-        return { k: 'attack', v: 21, label: '断罪' };
+        const it = cyc(e, [
+          { k: 'attack', v: 16, guard: 10, label: '打ち据え' },
+          { k: 'attack', v: 12, guard: 60, label: '殻を張る' },
+          { k: 'charge', label: '大鐘の構え', next: 40, nextLabel: '大鐘' },
+          { k: 'attack', v: 40, heavy: true, label: '大鐘' },
+        ]);
+        return Object.assign({}, it, { now: { k: 'mark', sym: e.mirrorSym || run.mostStocked() } });
       },
     },
   });

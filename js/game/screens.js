@@ -901,21 +901,11 @@ const TREE_SX = 1.12;
 
     respinOdds() {
       const run = this.run;
-      const unheld = run.reels.map((r, i) => !r.held && !r.jam);
-      if (!unheld.some(Boolean)) return null;
-      const cells = run.paylineCells();
-      const P = (i, s) => {
-        if (!unheld[i]) return cells[i].s === s || cells[i].s === 'wild' ? 1 : 0;
-        const st = run.reels[i].strip;
-        return st.filter((c) => c.s === s || c.s === 'wild').length / st.length;
-      };
-      let trine = 0;
-      const mk = run.enemy && run.enemy.now && run.enemy.now.k === 'mark' ? run.enemy.now.sym : null;
-      for (const s of ['blade', 'flame', 'ward', 'heart', 'lantern']) if (s !== mk) trine += P(0, s) * P(1, s) * P(2, s);
-      let bond = 0;
-      if (run.mods.bond && mk !== 'blade' && mk !== 'flame' && mk !== 'heart') { const B = SD.Data.BOND_ORDER; bond = P(0, B[0]) * P(1, B[1]) * P(2, B[2]); }
+      if (!run.reels.some((r) => !r.held && !r.jam)) return null;
+      // exact, judged as the resolve judges (wilds / 封じ / 絆): Run.respinOdds()
+      const { trine, bond } = run.respinOdds();
       const held = run.reels.filter((r) => r.held).length;
-      let s = `再演すると 三連 <b>${SD.UI.pct(Math.min(1, trine))}</b>`;
+      let s = `再演すると 三連 <b>${SD.UI.pct(trine)}</b>`;
       if (run.mods.bond) s += ` ／ 絆 <b>${SD.UI.pct(bond)}</b>`;
       if (!held && !this.dom.right.classList.contains('dense')) s += '<br><small>発動列のマスで留められる</small>';
       return s;

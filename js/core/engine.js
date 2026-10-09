@@ -948,15 +948,40 @@
       }
       return out;
     }
+    // Does this line make a 三連 / 絆 when resolved? Without wilds this is a plain count (as it always was); with wilds it
+    // asks evaluate(), so the hints (glows, 惜しい！, the slow last reel) never promise what the resolve would not do.
     _isGreat(cells) {
+      if (cells.some((c) => c.s === 'wild')) return this.evaluate(cells).combos.some((c) => c.k !== 'reaper');
       const e = this.enemy, mk = e && e.now && e.now.k === 'mark' ? e.now.sym : null;
-      const cnt = {}; let wild = 0;
-      for (const c of cells) { if (c.s === 'wild') wild++; else if (c.s !== 'skull' && c.s !== mk) cnt[c.s] = (cnt[c.s] || 0) + 1; }
+      const cnt = {};
+      for (const c of cells) { if (c.s !== 'skull' && c.s !== mk) cnt[c.s] = (cnt[c.s] || 0) + 1; }
       let best = 0;
       for (const k in cnt) best = Math.max(best, cnt[k]);
-      if (best + wild >= 3 || (wild >= 3)) return true;
+      if (best >= 3) return true;
       if (mk && D().BOND_ORDER.indexOf(mk) >= 0) return false;
       return !!(this.mods.bond && this._bondOk(cells));
+    }
+    // Exact odds that a line drawn from `lists` (per reel: the cells it can show, each equally likely) resolves into a
+    // 三連 and into a 絆, judged exactly as the resolve judges (wilds, the enemy's 封じ, 絆 unlocked or not).
+    // Cells are grouped by symbol, so this is at most 7^3 evaluations.
+    comboOdds(lists) {
+      const groups = lists.map((list) => {
+        const by = {};
+        for (const c of list) by[c.s] = (by[c.s] || 0) + 1;
+        return Object.keys(by).map((s) => ({ c: { s }, p: by[s] / list.length }));
+      });
+      let trine = 0, bond = 0;
+      for (const a of groups[0]) for (const b of groups[1]) for (const c of groups[2]) {
+        const R = this.evaluate([a.c, b.c, c.c]);
+        const w = a.p * b.p * c.p;
+        if (R.combos.some((x) => x.k === 'trine' || x.k === 'quad')) trine += w;
+        if (R.combos.some((x) => x.k === 'bond')) bond += w;
+      }
+      return { trine, bond };
+    }
+    // 再演: the odds of the coming respin (held / jammed reels keep their cell).
+    respinOdds() {
+      return this.comboOdds(this.reels.map((r, i) => (r.held || r.jam ? [this.paylineCell(i)] : r.strip)));
     }
     _bondOk(cells, wildAs) {
       const order = D().BOND_ORDER;
@@ -988,13 +1013,16 @@
     evaluate(cells, wildAs) {
       if (cells == null) cells = this.paylineCells();
       const wilds = cells.filter((c) => c.s === 'wild').length;
+      // 星 (wild): if the wilds can complete a combo (三連 / 絆), they always do — the best of those combos; only when no
+      // assignment makes one do they become the symbol with the best result. (What looks like a trine is one.)
       if (wilds > 0 && wildAs === undefined) {
-        let best = null;
+        let best = null, bestCombo = null;
         for (const cand of D().WILD_PRIORITY) {
           const r = this.evaluate(cells, cand);
           if (!best || r.utility > best.utility + 1e-9) best = r;
+          if (r.combos.some((c) => c.k !== 'reaper') && (!bestCombo || r.utility > bestCombo.utility + 1e-9)) bestCombo = r;
         }
-        return best;
+        return bestCombo || best;
       }
       const e = this.enemy || { hp: 1, maxHp: 1, armor: 0, now: null, seals: 0, block: 0, intent: null };
       const m = this.mods;

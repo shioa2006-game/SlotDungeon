@@ -681,6 +681,69 @@ function unit() {
     eq([pd.stats.deepRuns, pd.stats.deepFalls, pd.stats.deaths], [1, 1, 0], 'a fall after a descent: 灰の底 fall +1, deaths unchanged');
   }
 
+  section('星 (wild): a combo whenever it can make one; hints and odds judge exactly as the resolve');
+  {
+    const ids = ['nudge', 'respin', 'whet', 'cloak', 'sparkjar', 'wild'];
+    const at = (line, opts) => {
+      const r = fightRun(SD, (opts && opts.ids) || ids, (opts && opts.enemy) || 'husk', 13, { sparks: 2 });
+      if (opts && opts.hp != null) r.hp = Math.round(r.maxHp * opts.hp);
+      if (opts && opts.mark) { r.enemy.now = { k: 'mark', sym: opts.mark }; }
+      r.spin(); setPayline(r, line);
+      return r;
+    };
+    const kinds = (R) => R.combos.map((c) => c.k + ':' + c.s).join(',');
+    // the reported case: heart / star / star at full HP
+    const a = at(['heart', 'wild', 'wild'], { hp: 1 });
+    const A = a.forecast();
+    eq([A.wildAs, kinds(A)], ['heart', 'trine:heart'], 'heart/星/星 at full HP: a heart trine (it used to become a blade pair)');
+    const ev = a.resolve();
+    const pl = ev.find((x) => x.t === 'payline');
+    eq([pl.wildAs, pl.combos.map((c) => c.k + ':' + c.s).join(',')], ['heart', 'trine:heart'], 'and the resolve does exactly that');
+    eq(kinds(at(['heart', 'wild', 'heart'], { hp: 0.74 }).forecast()), 'trine:heart', 'heart/星/heart: a heart trine at any HP');
+    eq(kinds(at(['lantern', 'wild', 'lantern'], { hp: 0.3 }).forecast()), 'trine:lantern', 'lantern/星/lantern: the lantern trine (a combo beats a better-looking pair)');
+    // no combo possible: the best result, as before
+    const n = at(['heart', 'wild', 'flame'], { hp: 0.5 });
+    const N = n.forecast();
+    let best = null;
+    for (const c of SD.Data.WILD_PRIORITY) { const r = n.evaluate(n.paylineCells(), c); if (!best || r.utility > best.utility + 1e-9) best = r; }
+    ok(!N.combos.length && N.wildAs === best.wildAs, 'no combo possible: the 星 takes the best result (' + N.wildAs + ')');
+    // several combos possible: the best of them
+    const t = at(['wild', 'wild', 'wild'], { hp: 1 });
+    ok(t.forecast().combos.some((c) => c.k === 'trine'), '星/星/星: always a trine');
+    // 絆 when it is the combo on offer
+    const b = at(['heart', 'flame', 'wild'], { ids: ids.concat(['bond']), hp: 0.5 });
+    eq(kinds(b.forecast()), 'bond:undefined', 'heart/flame/星 with 絆: the 絆 (星 as blade)');
+    // a sealed symbol is no combo
+    const m = at(['blade', 'wild', 'blade'], { enemy: 'sentry', mark: 'blade' });
+    ok(!m.forecast().combos.length && m.forecast().wildAs !== 'blade', 'blade/星/blade under a blade 封じ: no combo, the 星 avoids the seal');
+    // hints judge exactly as the resolve; odds are exact
+    const GREAT = (R) => R.combos.some((c) => c.k !== 'reaper');
+    let agree = 0, total = 0, promise = 0, kept = 0, oddsOk = 0, oddsN = 0;
+    const R0 = SD.Util.makeRng(77), SYMS = ['blade', 'flame', 'ward', 'heart', 'lantern', 'skull', 'wild'];
+    for (let k = 0; k < 400; k++) {
+      const r = fightRun(SD, ids.concat(R0.chance(0.5) ? ['bond'] : []), ['sentry', 'abbot', 'husk', 'mirror'][k % 4], k % 4 >= 2 ? 13 : 8, { sparks: 3, seed: 700 + k });
+      r.hp = Math.max(1, Math.round(r.maxHp * R0.next()));
+      for (const x of r.reels) for (const c of x.strip) if (R0.chance(0.2)) c.s = SYMS[R0.int(SYMS.length)];
+      r.spin();
+      const cells = r.paylineCells();
+      total++; if (r._isGreat(cells) === GREAT(r.forecast())) agree++;
+      if (!GREAT(r.forecast())) for (const nm of r.nearMisses(1)) {
+        promise++;
+        if (r._sim((c) => { c.fight.freeNudgeLeft = 9; c.sparks = 9; c.nudge(nm.reel, nm.dir); return c.phase === 'spun' && GREAT(c.forecast()); })) kept++;
+      }
+      if (oddsN < 60) {
+        oddsN++;
+        const lists = r.reels.map((x, i) => (x.held || x.jam ? [r.paylineCell(i)] : x.strip));
+        let hit = 0, all = 0;
+        for (const p of lists[0]) for (const q of lists[1]) for (const s of lists[2]) { all++; if (r.evaluate([p, q, s]).combos.some((c) => c.k === 'trine' || c.k === 'quad')) hit++; }
+        if (Math.abs(r.respinOdds().trine - hit / all) < 1e-9) oddsOk++;
+      }
+    }
+    eq(agree, total, '_isGreat (glows, 惜しい！, the slow last reel) == what the resolve makes, over random lines');
+    ok(promise > 0 && kept === promise, `every "nudge here for a combo" hint keeps its promise (${kept}/${promise})`);
+    eq(oddsOk, oddsN, '再演 odds == brute force over the strips (the resolve\'s own judgement)');
+  }
+
   section('save / load: old saves load, new fields default safely');
   {
     const store = {};
@@ -718,7 +781,7 @@ function unit() {
 function regress(N) {
   section(`regression vs ${BASE_COMMIT}: ${N} runs with random actions, new 灯紋 never lit`);
   const A = baseSD(), Bc = currentSD();
-  const NEW = new Set(['borrow', 'hyoshigi']);
+  const NEW = new Set(['borrow', 'hyoshigi', 'wild']); // 'wild' (星の欠片): the 星 rule was changed on purpose (2026-10-09)
   const pick = SD_rng(9090);
   const proj = (run) => {
     const e = run.enemy;
@@ -736,7 +799,8 @@ function regress(N) {
   const evProj = (evs) => JSON.stringify(evs, (k, v) => (NEW_FIELDS.has(k) ? undefined : v))
     .replace(/,"cost":"spark"(?=[,}])/g, '');
   const firstDiff = (a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return i; };
-  let mismatches = 0, steps = 0;
+  let mismatches = 0, steps = 0, wildStops = 0;
+  const hasWild = (run) => run.reels.some((r) => r.strip.some((c) => c.s === 'wild') || (r.echo && r.echo.s === 'wild'));
   for (let n = 0; n < N; n++) {
     const pr = A.Meta.newProfile();
     pr.stats.runs = pick.int(10);
@@ -750,6 +814,8 @@ function regress(N) {
     let ea = ra.begin(), eb = rb.begin();
     let guard = 0;
     while (guard++ < 3000) {
+      // a 星 on the reels (e.g. the 星屑の小瓶 relic): the 星 rule differs from the base on purpose — stop comparing this run
+      if (hasWild(ra) || hasWild(rb)) { wildStops++; break; }
       steps++;
       const pa = proj(ra), pb = proj(rb);
       if (JSON.stringify(pa) !== JSON.stringify(pb) || evProj(ea) !== evProj(eb)) {
@@ -797,7 +863,8 @@ function regress(N) {
       } else break;
     }
   }
-  ok(mismatches === 0, `identical play without the new 灯紋 (${mismatches} diverged runs, ${steps} steps compared)`);
+  ok(mismatches === 0, `identical play without the new 灯紋 (${mismatches} diverged runs, ${steps} steps compared; ${wildStops} runs stopped at a 星, whose rule changed on purpose)`);
+  console.log(`  compared ${steps} steps over ${N} runs; ${wildStops} runs stopped at a 星 (its rule changed on purpose)`);
 }
 function SD_rng(seed) { const S = currentSD(); return S.Util.makeRng(seed); }
 

@@ -77,7 +77,7 @@ function purity(run) {
   count('purity');
 }
 
-const START = [1, 1, 5, 5, 8, 12];
+const START = [1, 1, 5, 5, 8, 12, 9, 13]; // 9 / 13: the post-clear shortcuts (第三層から / 灰の底から)
 
 for (let n = 0; n < N; n++) {
   const profile = randomProfile();
@@ -251,11 +251,16 @@ for (let n = 0; n < N; n++) {
     const before = JSON.parse(JSON.stringify(profile.stats)), e0 = profile.embers;
     SD.Meta.applyFinishedRun(profile, s);
     const st = profile.stats;
-    if (st.runs !== before.runs + 1 || st.wins - before.wins > 1 || st.bossKills - before.bossKills > 1) fail('a run was counted more than once', run);
+    if (s.deepOnly) {
+      // 灰の底から: the main-game record never moves
+      count('deep-only-run');
+      if (s.won || st.runs !== before.runs || st.wins !== before.wins || st.deaths !== before.deaths || st.bossKills !== before.bossKills || st.bestFloor !== before.bestFloor) fail('a 灰の底-only run touched the main-game record', run);
+      if (st.deepRuns !== before.deepRuns + 1 || (st.deepClears - before.deepClears) + (st.deepFalls - before.deepFalls) !== 1) fail('a 灰の底-only run was not counted exactly once', run);
+    } else if (st.runs !== before.runs + 1 || st.wins - before.wins > 1 || st.bossKills - before.bossKills > 1) fail('a run was counted more than once', run);
     if (profile.embers - e0 !== s.embers) fail('embers not counted exactly once: +' + (profile.embers - e0) + ' vs ' + s.embers, run);
     if (run.deep) {
       count('deep-run');
-      if (!s.won || !s.deep || !s.settled) fail('a descent ended without the settled win', run);
+      if (!s.deepOnly && (!s.won || !s.deep || !s.settled)) fail('a descent ended without the settled win', run);
       if (st.deaths !== before.deaths) fail('a fall in 灰の底 counted as a death', run);
       if (s.deep.floor >= 14 && !(run._deepMet && run._deepMet.husk && run._deepMet.mirror)) fail('reached B14 without meeting both new enemies', run);
       if (s.deep.cleared) count('deep-clear');

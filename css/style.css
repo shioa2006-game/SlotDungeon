@@ -316,6 +316,10 @@ small { font-size: 0.78em; opacity: 0.85; }
 .owned { margin-top: 10px; color: var(--gold); font-weight: 700; }
 .camp-descend { position: absolute; right: 18px; bottom: 54px; width: 300px; display: flex; flex-direction: column; gap: 8px; }
 .camp-descend .btn { width: 100%; }
+/* after the clear: the shortcuts as one compact column under 降下する */
+.camp-descend .btn.sc { padding: 7px 12px; font-size: 15px; }
+.camp-descend .btn.sc small { display: block; margin: 2px 0 0; font-size: 11px; }
+.camp-descend .btn.sc.deep { border-color: #8a8aa0; }
 
 /* ---------------------------------------------------------------- title */
 .title-box { position: absolute; left: 0; right: 0; top: 100px; text-align: center; pointer-events: auto; }

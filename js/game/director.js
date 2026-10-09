@@ -68,7 +68,12 @@
 
     // ---------------------------------------------------------------- run / room flow
     async on_runStart() { this.rs.scene.curtainTarget = 0; await this.wait(0.2); }
-    async on_shortcut(ev) { SD.FX.banner('第二層から降下', { sub: `刻印と遺物を選べる・最初の勝利で残り火 +${ev.embers}`, size: 44 }); await this.wait(0.8); }
+    async on_shortcut(ev) {
+      if (ev.deepOnly) SD.FX.banner('灰の底から降下', { sub: '刻印と遺物を選べる・本編の記録には付かない', size: 44 });
+      else if (ev.bossEmbers) SD.FX.banner(`${ev.label}降下`, { sub: `刻印と遺物を選べる・灰輪の主を倒すと残り火 +${ev.bossEmbers}`, size: 44 });
+      else SD.FX.banner('第二層から降下', { sub: `刻印と遺物を選べる・最初の勝利で残り火 +${ev.embers}`, size: 44 });
+      await this.wait(0.8);
+    }
 
     async on_floor(ev) {
       const rs = this.rs;

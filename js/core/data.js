@@ -40,6 +40,8 @@
     abyss:     { id: 'abyss',     name: '灰輪の座',       music: 'boss',      floors: [12, 12] },
     // 第四層 (after the boss, once the game has been cleared): enemies keep their listed numbers (no depth scaling)
     ashdeep:   { id: 'ashdeep',   name: '灰の底',         music: 'gearworks', floors: [13, 16], deep: true },
+    // B17 (stage 4, docs/EXPANSION_4A_SPEC.md): the true final boss's room. Reached only from the stage 4d entrances.
+    deepest:   { id: 'deepest',   name: '最深の間',       music: 'boss',      floors: [17, 17], deep: true },
   };
   const FLOORS = {
     1:  { zone: 'cellar', type: 'normal', pool: ['rat', 'slime'] },
@@ -59,10 +61,12 @@
     14: { zone: 'ashdeep', type: 'battle', deepSlot: 1 },
     15: { zone: 'ashdeep', type: 'normal', pool: ['husk', 'mirror'] },
     16: { zone: 'ashdeep', type: 'elite', enemy: 'bellkeeper' },
+    17: { zone: 'deepest', type: 'boss', enemy: 'kurite' },
   };
   const LAST_FLOOR = 12;
   const DEEP_FIRST_FLOOR = 13, DEEP_LAST_FLOOR = 16;
   const DEEP_PAIR = ['husk', 'mirror'];
+  const FINAL_FLOOR = 17;
   // Shortcut starts (free milestones): what you receive instead of the skipped floors.
   const SHORTCUTS = {
     5: { gate: 'bellhound', carvings: 3, relics: 1, embers: 25, label: '第二層から' },
@@ -253,6 +257,64 @@
     },
   });
 
+  // ---------------------------------------------------------------- B17 最深の間 「四本の糸」 (docs/EXPANSION_4B_PROMISE.md)
+  // The HP bar is four strings — ブラム, ルゥ, トト, then the last one for all three (strings[].hp, the first one on the right): damage always counts and runs on into the next
+  // string; crossing a mark snaps a string and starts the next act (its script from its first cell, sparks fill up: refill).
+  // ONE new rule: on a 吊り上げ cell (lift = the act's string), a 三連 / 四連 of the lifted hero's symbol — or 絆 — snaps the
+  // string being pulled at once (the rest of it). Wards never snap a string (they guard: two wards break any 溜め, as
+  // everywhere), so a lift asks: guard, or snap with the lifted hero's attack symbol. No seals, no steals.
+  // A cell is read on the act it belongs to (ph); a new act starts its script from its first cell (phaseAt).
+  const KURITE_STRINGS = [
+    { name: 'ブラムの糸', hero: 'knight', heroName: 'ブラム', hp: 200, syms: ['blade'] },
+    { name: 'ルゥの糸', hero: 'witch', heroName: 'ルゥ', hp: 250, syms: ['flame'] },
+    { name: 'トトの糸', hero: 'priest', heroName: 'トト', hp: 150, syms: ['heart'] },
+    { name: '最後の糸', hero: 'all', heroName: '三人', hp: 500, syms: ['blade', 'flame', 'heart'] },
+  ];
+  const KURITE_ACTS = [
+    [
+      { k: 'attack', v: 28, label: '糸引き' },
+      { k: 'charge', label: '吊り上げ', next: 66, nextLabel: '落とし', lift: 1 },
+      { k: 'attack', v: 66, heavy: true, label: '落とし' },
+      { k: 'attack', v: 30, label: '糸引き' },
+    ],
+    [
+      { k: 'attack', v: 40, label: '面打ち' },
+      { k: 'charge', label: '吊り上げ', next: 74, nextLabel: '落とし', lift: 2 },
+      { k: 'attack', v: 74, heavy: true, label: '落とし' },
+      { k: 'attack', v: 40, label: '面打ち' },
+    ],
+    [
+      // 祈りの段 opens on トト's lift: the sparks just filled up for it (a short act: トトの糸 is 150)
+      { k: 'charge', label: '吊り上げ', next: 74, nextLabel: '落とし', lift: 3 },
+      { k: 'attack', v: 74, heavy: true, label: '落とし' },
+      { k: 'attack', v: 40, label: '祈り潰し' },
+      { k: 'attack', v: 40, label: '祈り潰し' },
+    ],
+    [
+      { k: 'attack', v: 40, label: '秒読み・三' },
+      { k: 'attack', v: 40, label: '秒読み・二' },
+      { k: 'charge', label: '最後の糸', next: 100, nextLabel: '終幕', lift: 4 },
+      { k: 'attack', v: 100, heavy: true, label: '終幕' },
+    ],
+  ];
+  const KURITE_HP = KURITE_STRINGS.reduce((t, x) => t + x.hp, 0);
+  Object.assign(ENEMIES, {
+    kurite: {
+      name: '深淵の繰り手', hp: KURITE_HP, armor: 0, ember: 0, zone: 'deepest', boss: true, final: true, refill: true,
+      strings: KURITE_STRINGS,
+      // the HP at which each string snaps (ブラムの糸 at 900, ルゥの糸 at 650, トトの糸 at 500)
+      marks: KURITE_STRINGS.slice(0, -1).map((s, i) => KURITE_HP - KURITE_STRINGS.slice(0, i + 1).reduce((t, x) => t + x.hp, 0)),
+      acts: ['糸の段', '面の段', '祈りの段', '終幕の段'],
+      tip: '四本の糸を断て。',
+      ai(e) {
+        const P = e.phase || 1;
+        if (e.phaseFor !== P) { e.phaseFor = P; e.phaseAt = e.cursor || 0; }
+        const k = (e.cursor || 0) - e.phaseAt;
+        return Object.assign({ ph: P }, KURITE_ACTS[P - 1][k % 4]);
+      },
+    },
+  });
+
   // ---------------------------------------------------------------- relics (run only)
   const RELICS = {
     whetstone:  { name: '砥石',       glyph: '砥', desc: '剣の基礎ダメージ+2' },
@@ -402,6 +464,6 @@
 
   SD.Data = {
     SYMBOLS, WILD_PRIORITY, BOND_ORDER, MATCH_MULT, START_STRIPS, STRIP_MIN, STRIP_MAX, BASE_HP,
-    HEROES, ZONES, FLOORS, LAST_FLOOR, DEEP_FIRST_FLOOR, DEEP_LAST_FLOOR, DEEP_PAIR, SHORTCUTS, ENEMIES, RELICS, EVENTS, SKILLS, SKILL_BY_ID,
+    HEROES, ZONES, FLOORS, LAST_FLOOR, DEEP_FIRST_FLOOR, DEEP_LAST_FLOOR, DEEP_PAIR, FINAL_FLOOR, SHORTCUTS, ENEMIES, RELICS, EVENTS, SKILLS, SKILL_BY_ID,
   };
 })();

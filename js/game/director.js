@@ -66,6 +66,18 @@
       }
     }
 
+    isFinal() { const e = this.rs.run.enemy; return !!(e && SD.Data.ENEMIES[e.id] && SD.Data.ENEMIES[e.id].final); }
+    // 四本の糸: a hero (or all three) is lifted by the puppeteer
+    liftFx(it) {
+      const lift = this.rs.run.liftOf ? this.rs.run.liftOf(it) : null;
+      if (!lift) return;
+      const ids = lift.hero === 'all' ? ['priest', 'witch', 'knight'] : [lift.hero];
+      for (const id of ids) { const p = this.heroFx(id); SD.FX.burst(p.x, p.y - 60, 8, { color: ['#ffd257', '#fff6d8'], kind: 'mote', speed: 80, gravity: -30 }); }
+      const p = this.heroFx(ids[Math.floor(ids.length / 2)]);
+      SD.FX.text(p.x, p.y - 120, `${lift.heroName}が吊り上げられた`, { color: '#ffe1a0', size: 22, vy: -16, life: 1.4 });
+      this.sfx('windup', { pitch: 1.2 });
+    }
+
     // ---------------------------------------------------------------- run / room flow
     async on_runStart() { this.rs.scene.curtainTarget = 0; await this.wait(0.2); }
     async on_shortcut(ev) {
@@ -118,7 +130,7 @@
         if (SD.Audio) { SD.Audio.setMusic('boss'); SD.Audio.play('boss_appear'); SD.Audio.duck(0.6, 2); }
         SD.FX.shake(6);
         for (let k = 0; k <= 20; k++) { a.alpha = k / 20; await this.wait(0.05); }
-        SD.FX.banner(ev.enemy.name, { sub: '封印を三連か絆で砕け。封じたままでは灰輪が加速する', size: 60, color: '#e8d0ff', glow: 'rgba(150,90,255,0.6)', life: 2.2, y: 300 });
+        SD.FX.banner(ev.enemy.name, { sub: ev.enemy.final ? '四本の糸を断て' : '封印を三連か絆で砕け。封じたままでは灰輪が加速する', size: 60, color: '#e8d0ff', glow: 'rgba(150,90,255,0.6)', life: 2.2, y: 300 });
         await this.wait(1.4);
         rs.scene.bossDark = 0;
       } else {
@@ -130,6 +142,7 @@
       }
       if (ev.momentum) SD.FX.text(330, 230, '追撃 ×1.5', { color: '#ffd257', size: 26, vy: -30 });
       rs.setIntent(ev.intent);
+      this.liftFx(ev.intent);
     }
 
     async on_event(ev) { this.rs.showEvent(ev.event); }
@@ -272,6 +285,7 @@
         e.play('hit', 0.25);
       }
       SD.FX.text(640, 452, '台本を送った', { color: '#e8bf6a', size: 20, vy: -10, life: 1.0 });
+      this.liftFx(ev.intent);
       await this.wait(0.35);
     }
 
@@ -302,6 +316,7 @@
     }
 
     async on_chain() {
+      if (this._snapBeat) { this._snapBeat = false; await this.wait(0.35); } // (a snapped string is read to the end first)
       SD.FX.banner('連鎖', { sub: 'もう一度廻る', size: 54, color: '#ffb36b', life: 0.9 });
       this.sfx('combo_pair');
       await this.wait(0.5);
@@ -438,6 +453,25 @@
         this.dmgEnemy(ev.hp, ev.dmg, { color: '#e2c8ff', sub: '髑髏の契約' });
         await this.wait(0.15);
       }
+    }
+
+    // 四本の糸: the lifted hero's combo snapped the string
+    async on_stringCut(ev) {
+      const rs = this.rs, V = this.V(), FX = SD.FX;
+      rs.setIntent(null); // (the old act's plaque goes: its blow will never come; the new act's comes with the next turn)
+      rs.liftFree = true;
+      FX.banners.length = 0; FX.texts.length = 0; // (the combo's banner and numbers step aside: only the snap is read)
+      FX.stop(140); FX.shake(9); FX.flash('rgba(255,214,120,1)', 0.45, 2.2);
+      const ids = ev.hero === 'all' ? ['priest', 'witch', 'knight'] : [ev.hero];
+      for (const id of ids) { const p = this.heroFx(id); FX.burst(p.x, p.y - 80, 26, { color: ['#ffd257', '#fff6d8'], speed: 320 }); this.heroAt(id).play('cheer', 0.8); }
+      // whose string, and how many are left (the last one: the fight is won)
+      const S = SD.Data.ENEMIES[rs.run.enemy.id].strings || [], left = Math.max(0, S.length - 1 - S.findIndex((s) => s.name === ev.string));
+      FX.text(640, 200, `${ev.string}を断った！`, { color: '#ffe1a0', size: 44, vy: -8, life: 1.7, sub: ev.last ? '' : `残りの糸 ${left}本` });
+      this._snapBeat = !ev.last;
+      this.sfx('seal_break'); this.sfx('combo_bond', { vol: 0.7 });
+      if (ev.dmg > 0) this.dmgEnemy(ev.hp, ev.dmg, { big: true, color: '#ffd257', parts: ['#ffd257', '#fff6d8'] });
+      else if (V.enemy) V.enemy.hp = ev.hp;
+      await this.wait(1.0);
     }
 
     async on_reaper(ev) {
@@ -593,6 +627,7 @@
 
     async on_enemyGrow(ev) { const p = this.enemyFx(); SD.FX.text(p.x, p.y - 90, '攻撃↑', { color: '#ff9a8a', size: 22, vy: -30 }); }
     async on_enemyCharge(ev) {
+      if (ev.stale) return; // (四本の糸: the lift of an act that already ended winds nothing up)
       const e = this.rs.scene.enemy;
       if (e) e.setHold('windup');
       this.sfx('windup');
@@ -647,7 +682,7 @@
     async on_staggerCancel(ev) {
       const p = this.enemyFx();
       const brk = SD.UI.breaksStance(this.rs.run);
-      SD.FX.text(p.x, p.y - 90, brk ? `${(ev && ev.skipped && ev.skipped.label) || '大鐘'}は崩れた` : '強撃は不発', { color: '#9fe8ff', size: 28, sub: SD.UI.bandVisible(this.rs.run) ? '台本から消えた' : null });
+      SD.FX.text(p.x, p.y - 90, this.isFinal() ? `${(ev && ev.skipped && ev.skipped.label) || '強撃'}は消えた` : brk ? `${(ev && ev.skipped && ev.skipped.label) || '大鐘'}は崩れた` : '強撃は不発', { color: '#9fe8ff', size: 28, sub: SD.UI.bandVisible(this.rs.run) ? '台本から消えた' : null });
       if (SD.UI.bandVisible(this.rs.run)) this.rs.bandSlide = 1;
       await this.wait(0.35);
     }
@@ -660,16 +695,24 @@
       this.V().enemy.phase = ev.phase;
       this.sfx('boss_phase');
       SD.FX.shake(10); SD.FX.flash('rgba(160,80,255,1)', 0.4, 1.5, false);
-      SD.FX.banner(ev.phase === 2 ? '逆廻り' : '破滅の秒読み', { sub: ev.phase === 2 ? '封じが巡る。外して殴れ' : '灰燼が来る。盾で受けるか、削り切れ', size: 60, color: '#e8d0ff', glow: 'rgba(150,80,255,0.6)', life: 1.6 });
+      if (this.isFinal()) {
+        const S = SD.Data.ENEMIES[rs.run.enemy.id].strings || [];
+        const left = S.length - (ev.phase - 1), now = S[ev.phase - 1];
+        SD.FX.banner((SD.Data.ENEMIES[rs.run.enemy.id].acts || [])[ev.phase - 1] || '', { sub: `残りの糸 ${left}本（次は${now ? now.name : ''}）・火種が満ちる`, size: 60, color: '#e8d0ff', glow: 'rgba(150,80,255,0.6)', life: 1.8 });
+        if (ev.gained) { for (let k = Math.max(0, ev.sparks - ev.gained); k < ev.sparks; k++) rs.reels.flareCandle(k); }
+      }
+      else SD.FX.banner(ev.phase === 2 ? '逆廻り' : '破滅の秒読み', { sub: ev.phase === 2 ? '封じが巡る。外して殴れ' : '灰燼が来る。盾で受けるか、削り切れ', size: 60, color: '#e8d0ff', glow: 'rgba(150,80,255,0.6)', life: 1.6 });
       if (ev.gained) { this.V().sparks = ev.sparks; rs.reels.flareCandle(ev.sparks - 1); this.sfx('spark_gain'); }
       await this.wait(1.1);
     }
 
     async on_newTurn(ev) {
       const rs = this.rs, V = this.V();
+      this._snapBeat = false;
       V.block = ev.block; V.sparks = ev.sparks; V.borrowed = 0;
       Object.assign(V.enemy, rs.enemyView(ev.enemy, true));
       rs.setIntent(ev.intent);
+      this.liftFx(ev.intent);
       if (rs.scene.enemy) {
         const it = ev.intent;
         rs.scene.enemy.setHold(it.k === 'charge' || it.k === 'doom' || (it.heavy && it.k === 'attack') ? 'windup' : it.now && (it.now.k === 'curl' || it.now.k === 'reflect') ? 'stance' : null);
@@ -711,7 +754,8 @@
       if (SD.Audio) SD.Audio.setMusic('victory');
       SD.FX.flash('rgba(255,240,200,1)', 0.8, 0.8);
       for (const h of rs.scene.heroList()) h.play('cheer', 1.2);
-      SD.FX.banner('灰輪の主を討った', { sub: '灯輪は、再び正しく廻り始める', size: 56, life: 3 });
+      const fin = this.rs.run.killer == null && this.rs.run.floor === SD.Data.FINAL_FLOOR;
+      SD.FX.banner(fin ? '深淵の繰り手を討った' : '灰輪の主を討った', { sub: fin ? '糸は断たれた。運命は、三人の手に' : '灯輪は、再び正しく廻り始める', size: 56, life: 3 });
       for (let k = 0; k < 6; k++) { SD.FX.burst(200 + k * 180, 200, 30, { color: ['#ffd257', '#fff6d8', '#ff9a3c'], kind: 'star', speed: 380 }); await this.wait(0.3); }
       await this.wait(1.2);
     }

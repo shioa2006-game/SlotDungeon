@@ -167,6 +167,17 @@
       }
       // overlays on top of the glass
       for (let i = 0; i < run.reels.length; i++) this._drawOverlay(ctx, i, st);
+      // 四本の糸: this line snaps the string
+      if (st.cutNow && !this.busy()) {
+        const x0 = L.reels[0].x, x1 = L.reels[L.reels.length - 1].x + L.reels[L.reels.length - 1].w, cy = L.paylineY - 2, pulse = 0.6 + 0.4 * Math.sin(t * 5);
+        ctx.save();
+        SD.Art.glow(ctx, (x0 + x1) / 2, L.paylineY + L.paylineH / 2, 260, 'rgba(255,210,87,0.5)', pulse * 0.6);
+        SD.Art.roundRectPath(ctx, (x0 + x1) / 2 - 64, cy - 13, 128, 26, 9); ctx.fillStyle = 'rgba(60,40,10,0.96)'; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = '#ffd257'; ctx.stroke();
+        ctx.font = `900 15px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffe1a0';
+        ctx.fillText('糸を断つ', (x0 + x1) / 2, cy + 1);
+        ctx.restore();
+      }
       for (let i = 0; i < run.reels.length; i++) this._drawRibbon(ctx, i, st);
       this._drawCandles(ctx, st);
       if (Art.drawLever) Art.drawLever(ctx, LEVER.x, LEVER.y, this.lever.pull, t, { hover: this.hover && this.hover.kind === 'lever' && st.leverActive, disabled: !st.leverActive });
@@ -272,6 +283,19 @@
           ctx.save(); ctx.strokeStyle = 'rgba(232,191,106,0.95)'; ctx.lineWidth = 3;
           SD.Art.roundRectPath(ctx, R.x + 4, L.paylineY + 3, R.w - 8, L.paylineH - 6, 10); ctx.stroke(); ctx.restore();
         }
+      }
+      // 四本の糸: a nudge here makes the combo that snaps the string being pulled
+      if (st.cutMiss) for (const cm of st.cutMiss) {
+        if (cm.reel !== i) continue;
+        const y = cm.dir < 0 ? R.y : L.paylineY + L.paylineH, pulse = 0.55 + 0.45 * Math.sin(t * 6);
+        ctx.save();
+        ctx.strokeStyle = `rgba(255,210,87,${0.6 + pulse * 0.4})`; ctx.lineWidth = 5;
+        SD.Art.roundRectPath(ctx, R.x + 4, y + 3, R.w - 8, L.rowH - 6, 10); ctx.stroke();
+        SD.Art.glow(ctx, R.x + R.w / 2, y + L.rowH / 2, 80, 'rgba(255,200,80,0.6)', pulse * 0.7);
+        ctx.font = `900 13px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+        const ty = cm.dir < 0 ? y + 12 : y + L.rowH - 12;
+        ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText('糸を断つ', R.x + R.w / 2, ty); ctx.fillStyle = '#ffe1a0'; ctx.fillText('糸を断つ', R.x + R.w / 2, ty);
+        ctx.restore();
       }
       // held label
       if (run.reels[i].held) {

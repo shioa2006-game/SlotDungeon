@@ -16,6 +16,10 @@
  *   node tools/sim.js b16 [n]                  灰鐘の番人 (B16) per strategy and growth stage: win rate, fight length, how each 大鐘 was
  *                                              answered (hits through the shell / two wards / it landed), and what the turns looked like
  *                                              (actions per turn, decision turns, which symbol led the line, how often the same lead repeats)
+ *   node tools/sim.js b17 [n]                  深淵の繰り手「四本の糸」(B17) on boards from whole-tree runs that cleared B16 (entrance ①: a campfire,
+ *                                              then B17), per carving taste, with the omniscient bot: win rate, fight length, the lifts (snapped /
+ *                                              the 溜め broken / neither), how the acts ended, the blows that landed, sparks. Human-like policies:
+ *                                              docs/EXPANSION_4B_PROMISE.md (gate B).
  * Bots play through the real engine (js/core). NOSCRIPT=1 keeps the bots from using 拍子木 / 借り火 even when lit. */
 'use strict';
 const path = require('path');
@@ -768,5 +772,134 @@ if (mode === 'b16') {
     console.log(`  ${strat.padEnd(8)} first B16 kill: run ${median(G.filter((g) => g.b16 != null).map((g) => g.b16))} (never ${G.filter((g) => g.b16 == null).length})  whole tree: run ${median(G.filter((g) => g.full != null).map((g) => g.full))}  B16 after the tree ${f0(pc(G.filter((g) => g.full != null), (g) => g.b16 == null || g.b16 > g.full))}%` +
       `  | first 2 runs: reached B16 ${f0(pc(E, (x) => x.deep.floor >= 16 || x.deep.cleared))}%  cleared ${f0(pc(E, (x) => x.deep.cleared))}% (n${E.length})`);
   }
+}
+if (mode === 'b17') {
+  // 深淵の繰り手 on real boards: whole-tree profile, runs from B9 (第三層から, then 灰の底) and B13 (灰の底から) in turn; every run
+  // that clears B16 goes on as entrance ① will (a campfire: rest below 75% HP, else carve; one spark for the win) into B17.
+  const n = +a1 || 60;
+  const KD = SD.Data.ENEMIES.kurite;
+  const full = SD.Meta.newProfile();
+  for (const s of SD.Data.SKILLS) full.unlocked[s.id] = true;
+  Object.assign(full.stats, { runs: 40, wins: 3, deepRuns: 3, deepClears: 1, eliteKills: { bellhound: 3, abbot: 3, ashlord: 3, bellkeeper: 1 } });
+  const TASTES = {
+    default: null,
+    blade: { blade: 6, flame: 2, ward: 1.5, heart: 1.5, lantern: 0.3, wild: 6, skull: -5 },
+    flame: { flame: 6, blade: 2, ward: 1.5, heart: 1.5, lantern: 0.3, wild: 6, skull: -5 },
+    ward: { ward: 6, heart: 3, blade: 1.5, flame: 1.5, lantern: 0.3, wild: 5, skull: -5 },
+    skull: { skull: 4, blade: 3, flame: 2.6, ward: 2, heart: 2, lantern: 0.5, wild: 6 },
+  };
+  const toB17 = (run) => {
+    for (const r of run.reels) {
+      const keep = r.strip[r.pos];
+      r.strip = r.strip.filter((c) => !c.temp);
+      const np = r.strip.indexOf(keep);
+      r.pos = np >= 0 ? np : 0;
+      r.held = false; r.carried = false; r.jam = false; r.echo = null;
+    }
+    run.block = 0;
+    run._gainSparks(run.mods.sparkPerWin);
+    run.phase = 'event'; run.event = { id: 'campfire', options: [{ id: 'rest' }, { id: 'carve' }] }; run.pending = [];
+    if (run.hp < run.maxHp * 0.75) run.hp = Math.min(run.maxHp, run.hp + Math.round(run.maxHp * 0.35));
+    else { run._beginChisel(1, 'remove', 'campfire'); handleBetween(run); }
+    run.event = null; run.chisel = null; run.offers = null; run.doors = null; run.pending = [];
+    run.floor = SD.Data.FINAL_FLOOR; run.enemy = null; run.fight = null;
+    run._startCombat('kurite', {});
+  };
+  let F = null;
+  LOG.hook = {
+    spun(run) {
+      if (!F || run.enemy !== F.e) return;
+      const T = { ph: run.enemy.phase, sparks: run.sparkAvail(), acts: [], cell: run.enemy.intent.label, any: run._anyAction(true) };
+      T.dec = !run.shouldAutoResolve();
+      F.turns.push(T); F.cur = T;
+    },
+    act(run, act) {
+      const T = F && F.cur;
+      if (!T || run.enemy !== F.e) return;
+      T.acts.push(act.k);
+    },
+    resolve(run, ev, e0, it0, R) {
+      const T = F && F.cur;
+      if (!T || e0 !== F.e) return;
+      const G = R.groups, act = Object.keys(G).filter((s) => s !== R.marked && s !== 'skull' && s !== 'wild');
+      let lead = null, ln = 0;
+      for (const s of ['blade', 'flame', 'ward', 'heart', 'lantern']) if (act.indexOf(s) >= 0 && G[s].n > ln) { ln = G[s].n; lead = s; }
+      if (!lead && G.skull) lead = R.reaper ? 'reaper' : 'skull';
+      T.lead = lead || 'none';
+      T.combo = R.combos.map((c) => c.k).join('+') || '-';
+      T.dmg = R.totalDmg;
+      T.heavyIn = it0 && it0.k === 'charge' ? it0.nextLabel : null;
+      T.struck = ev.some((x) => x.t === 'staggerCancel');
+      T.killed = ev.some((x) => x.t === 'enemyDie');
+      T.bossHpAfter = e0.hp;
+      T.heavyLanded = ev.filter((x) => x.t === 'enemyAttack' && x.heavy).map((x) => ({ raw: x.raw, dmg: x.dmg, guardian: x.guardian, back: x.thorns || 0 }));
+      T.hpAfter = run.hp;
+      T.lift = !!(it0 && it0.lift); T.snap = ev.some((x) => x.t === 'stringCut'); T.actUp = ev.some((x) => x.t === 'bossPhase');
+      T.label = it0 ? it0.label : '';
+      F.cur = null;
+    },
+  };
+  const res = [];
+  let k = 0;
+  for (const taste of (process.env.TASTES || Object.keys(TASTES).join(',')).split(',')) {
+    LOG.symPref = TASTES[taste];
+    for (let s = 0; s < n; s++, k++) {
+      const start = k % 2 ? 13 : 9;
+      F = null;
+      const { run, summary } = playRun(JSON.parse(JSON.stringify(full)), { seed: 17000 + k, startFloor: start });
+      const cleared = summary.deep && summary.deep.cleared;
+      if (!cleared) { res.push({ taste, start, reached: false }); continue; }
+      toB17(run);
+      const e = run.enemy;
+      F = { e, turns: [], cur: null };
+      const hp0 = run.hp, sp0 = run.sparks;
+      let t = 0;
+      while (run.enemy === e && run.phase === 'idle' && t < 60) { playTurn(run, true); t++; }
+      const won = e.hp <= 0;
+      res.push({ taste, start, reached: true, won, turns: t, hp0, maxHp: run.maxHp, sp0, phase: e.phase, enemyHpPct: e.hp / e.maxHp, T: F.turns,
+        relics: run.relics.slice(), stats: run.stats });
+      F = null;
+    }
+  }
+  LOG.hook = null; LOG.symPref = null;
+  const f0 = (x) => (Number.isFinite(x) ? x.toFixed(0) : '-'), f1 = (x) => (Number.isFinite(x) ? x.toFixed(1) : '-');
+  const pc = (a, f) => (a.length ? a.filter(f).length / a.length * 100 : NaN);
+  const sum = (a, f) => a.reduce((t, x) => t + f(x), 0);
+  console.log(`深淵の繰り手 (B17) — ${n} runs per taste; HP=${KD.hp} strings=${KD.strings.map((s) => s.hp).join('/')}`);
+  const A = res.filter((x) => x.reached);
+  console.log(`  reached B17 ${A.length}/${res.length}  (start HP med ${median(A.map((x) => Math.round(x.hp0 / x.maxHp * 100)))}%  maxHP med ${median(A.map((x) => x.maxHp))}  sparks med ${median(A.map((x) => x.sp0))})`);
+  const row = (label, S) => {
+    if (!S.length) return;
+    const W = S.filter((x) => x.won), TT = S.flatMap((x) => x.T);
+    console.log(`  ${label.padEnd(8)} fights ${String(S.length).padStart(4)}  win ${f0(pc(S, (x) => x.won)).padStart(3)}%  turns med ${median(S.map((x) => x.turns))} (wins ${median(W.map((x) => x.turns))}, p10-p90 ${pct(W.map((x) => x.turns), 0.1)}-${pct(W.map((x) => x.turns), 0.9)})` +
+      `  lost at: act1 ${f0(pc(S.filter((x) => !x.won), (x) => x.phase === 1))}% act2 ${f0(pc(S.filter((x) => !x.won), (x) => x.phase === 2))}% act3 ${f0(pc(S.filter((x) => !x.won), (x) => x.phase === 3))}% act4 ${f0(pc(S.filter((x) => !x.won), (x) => x.phase === 4))}%  boss HP left on loss med ${f0(median(S.filter((x) => !x.won).map((x) => x.enemyHpPct * 100)))}%  turn-1 dmg max ${Math.max(0, ...S.map((x) => (x.T[0] && x.T[0].dmg) || 0))}`);
+  };
+  console.log('\n[1] outcome by carving taste');
+  for (const tz of [...new Set(A.map((x) => x.taste))]) row(tz, A.filter((x) => x.taste === tz));
+  row('ALL', A);
+  const TT = A.flatMap((x) => x.T.map((t) => Object.assign({ won: x.won }, t)));
+  { const W = A.filter((x) => x.won); console.log('  won fights, turns per act (median / p90): ' + [1, 2, 3, 4].map((p) => `act${p} ${median(W.map((x) => x.T.filter((t) => t.ph === p).length))} / ${pct(W.map((x) => x.T.filter((t) => t.ph === p).length), 0.9)}`).join('  ')); }
+  const W = A.filter((x) => x.won);
+  console.log('\n[2] 吊り上げ (the lifted hero\'s 三連 or 絆 snaps the string; two wards break the 溜め)');
+  for (const ph of [1, 2, 3, 4]) {
+    const S = TT.filter((t) => t.ph === ph && t.lift);
+    if (!S.length) continue;
+    console.log(`  act${ph}: lift turns ${S.length}  snapped ${f0(pc(S, (t) => t.snap))}%  broke the 溜め only ${f0(pc(S, (t) => t.struck && !t.snap))}%  neither ${f0(pc(S, (t) => !t.snap && !t.struck))}%  (sparks at the spin med ${median(S.map((t) => t.sparks))})`);
+  }
+  const ups = TT.filter((t) => t.actUp);
+  console.log(`  acts ended ${ups.length}: by a lift snap ${f0(pc(ups, (t) => t.snap))}%  by damage ${f0(pc(ups, (t) => !t.snap))}%;  won fights finished by a lift snap ${f0(pc(W, (x) => x.T.length && x.T[x.T.length - 1].snap))}%`);
+  console.log('\n[3] the blows (落とし / 終幕) and the sparks');
+  for (const ph of [1, 2, 3, 4]) {
+    const S = TT.filter((t) => t.ph === ph);
+    if (!S.length) continue;
+    const landed = S.flatMap((t) => t.heavyLanded || []);
+    console.log(`  act${ph}: turns ${S.length}  heavy blows landed ${landed.length} (dmg taken med ${median(landed.map((h) => h.dmg))}, reflected by 守護 ${landed.filter((h) => h.guardian).length})  0 sparks at the spin ${f0(pc(S, (t) => t.sparks === 0))}%  decision turns ${f0(pc(S, (t) => t.dec))}%`);
+  }
+  console.log('\n[4] how the turns differ (all turns)');
+  const leads = {}, acts = {};
+  for (const t of TT) { leads[t.lead] = (leads[t.lead] || 0) + 1; for (const x of t.acts) acts[x] = (acts[x] || 0) + 1; }
+  console.log(`  lead: ${Object.keys(leads).sort((x, y) => leads[y] - leads[x]).map((kk) => kk + ' ' + f0(leads[kk] / TT.length * 100) + '%').join('  ')}`);
+  console.log(`  actions per turn ${f1(sum(TT, (t) => t.acts.length) / TT.length)}: ${Object.keys(acts).sort((x, y) => acts[y] - acts[x]).map((kk) => kk + ' ' + f1(acts[kk] / TT.length)).join('  ')}`);
+  console.log(`  damage per turn med ${median(TT.map((t) => t.dmg))}`);
 }
 function median(a) { if (!a.length) return NaN; const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; }

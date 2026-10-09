@@ -121,6 +121,13 @@
       ctx.beginPath(); ctx.rect(0, 0, 1280, 446); ctx.clip();
       if (Art.drawBackground) {
         Art.drawBackground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth });
+        if (this.zone === 'deepest') { // 最深の間 (stage 4b stand-in)
+          ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.6; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
+          ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.42; ctx.fillStyle = '#1a0a24'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
+          ctx.save(); ctx.globalAlpha = 0.14; ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1;
+          for (let k = 0; k < 18; k++) { const x = 80 + k * 66 + Math.sin(k * 7.3) * 20; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + Math.sin(this.time * 0.4 + k) * 6, 446); ctx.stroke(); }
+          ctx.restore();
+        }
         if (this.zone === 'ashdeep') { // 灰の底: the same ruins, drained to ash
           ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.75; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
           ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.18; ctx.fillStyle = '#1a1820'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
@@ -132,9 +139,26 @@
       g.addColorStop(0, 'rgba(10,8,18,0.42)'); g.addColorStop(0.35, 'rgba(10,8,18,0.22)'); g.addColorStop(0.8, 'rgba(10,8,18,0.16)'); g.addColorStop(1, 'rgba(10,8,18,0.30)');
       ctx.fillStyle = g; ctx.fillRect(0, 0, 1280, 446);
       Art.glow(ctx, 640, 470, 640, 'rgba(255,170,90,0.16)', 1);
+      // 四本の糸: a lifted hero (st.lift: hero ids) hangs from a golden string, feet off the floor
+      const lifted = (st && st.lift) || [];
+      for (const h of this.heroList()) {
+        const on = lifted.indexOf(h.id) >= 0;
+        h.liftK = (h.liftK || 0) + ((on ? 1 : 0) - (h.liftK || 0)) * 0.12;
+        if (h.liftK < 0.01) h.liftK = 0;
+        h.dy = -20 * h.liftK + (h.liftK > 0.5 ? Math.sin(this.time * 2.2 + h.x * 0.01) * 2 : 0);
+      }
       // actors (enemy behind heroes' layer order doesn't matter much: they don't overlap)
       if (this.enemy) drawActor(ctx, this.enemy, this.time);
       for (const h of this.heroList()) drawActor(ctx, h, this.time);
+      for (const h of this.heroList()) {
+        if (!h.liftK) continue;
+        const info = h.info(), hx = h.x + 4, hy = h.y + h.dy - (info.height || 110) + 6;
+        ctx.save(); ctx.globalAlpha = h.liftK; ctx.lineCap = 'round';
+        Art.glow(ctx, hx, hy, 26, 'rgba(255,210,87,0.9)', 0.6 + 0.3 * Math.sin(this.time * 4));
+        ctx.strokeStyle = 'rgba(255,210,87,0.35)'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(hx, 0); ctx.lineTo(hx, hy); ctx.stroke();
+        ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.restore();
+      }
       if (st && st.drawWorldFx) st.drawWorldFx(ctx);
       if (Art.drawForeground) Art.drawForeground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth });
       ctx.restore();
@@ -149,11 +173,19 @@
       if (this.enemy && V && V.enemy && st.showEnemyBar) {
         const e = this.enemy, info = e.info();
         // the boss's bar hangs at the top centre: its name (above the bar) keeps clear of the DOM HUD too (QA-001)
-        if (V.enemy.boss) drawEnemyBar(ctx, V.enemy, 640, belowHud(st.hudRects ? st.hudRects() : null, 640 - 260, 520, 104 - 26, 42) + 26, this.time, st.ghostPct);
-        else drawEnemyBar(ctx, V.enemy, e.x, 392, this.time, st.ghostPct);
+        let ist = st;
+        if (V.enemy.boss) {
+          const barY = belowHud(st.hudRects ? st.hudRects() : null, 640 - 260, 520, 104 - 26, 42) + 26;
+          drawEnemyBar(ctx, V.enemy, 640, barY, this.time, st.ghostPct);
+          // 深淵の繰り手: its plaque and band hang below the bar and the string labels under it
+          if (V.enemy.final) {
+            const block = { x: 640 - 264, y: barY - 24, w: 528, h: 24 + 16 + 22 };
+            ist = Object.assign({}, st, { hudRects: () => (st.hudRects ? st.hudRects() : []).concat([block]) });
+          }
+        } else drawEnemyBar(ctx, V.enemy, e.x, 392, this.time, st.ghostPct);
         this.bandRects = [];
         if (st.intent) {
-          if (V.enemy.boss) this.bandRects = drawIntent(ctx, st.intent, e.x - 250, 214, this.time, st) || [];
+          if (V.enemy.boss) this.bandRects = drawIntent(ctx, st.intent, e.x - 250, 214, this.time, ist) || [];
           else this.bandRects = drawIntent(ctx, st.intent, e.x + (info.head ? info.head[0] : 0), e.y + (info.head ? info.head[1] : -info.height) - 18, this.time, st) || [];
         }
       } else this.bandRects = [];
@@ -220,7 +252,7 @@
   function drawEnemyBar(ctx, E, cx, y, t, ghostPct) {
     const w = E.boss ? 520 : 200, h = E.boss ? 16 : 14, x = cx - w / 2;
     const frac = Math.max(0, E.hpShown / E.maxHp), ghost = Math.max(0, E.hpGhost / E.maxHp);
-    bar(ctx, x, y, w, h, frac, ghost, { bg: '#2a1520', fg: E.dread ? '#ff3b4e' : '#d8405a', ghost: '#ffd0a0' });
+    bar(ctx, x, y, w, h, frac, ghost, { bg: '#2a1520', fg: E.final ? '#d9a63a' : E.dread ? '#ff3b4e' : '#d8405a', ghost: '#ffd0a0' });
     if (ghostPct != null && ghostPct > 0 && ghostPct < 1) {
       const gx = x + w * ghostPct;
       ctx.save(); ctx.strokeStyle = '#ffe1a0'; ctx.lineWidth = 2; ctx.setLineDash([3, 3]);
@@ -232,8 +264,9 @@
     // name (under the bar so it never covers the puppet)
     ctx.save(); ctx.font = `700 15px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
     const ny = E.boss ? y - 10 : y + h + 15;
-    ctx.lineWidth = 4; ctx.strokeStyle = '#1a1222'; ctx.strokeText(E.name, cx, ny);
-    ctx.fillStyle = E.dread ? '#ff8a8a' : E.elite || E.boss ? '#ffd257' : '#efe5cf'; ctx.fillText(E.name, cx, ny); ctx.restore();
+    const nm = E.final ? `${E.name}・${(E.acts || [])[(E.phase || 1) - 1] || ''}` : E.name; // (the final boss: its act)
+    ctx.lineWidth = 4; ctx.strokeStyle = '#1a1222'; ctx.strokeText(nm, cx, ny);
+    ctx.fillStyle = E.dread ? '#ff8a8a' : E.elite || E.boss ? '#ffd257' : '#efe5cf'; ctx.fillText(nm, cx, ny); ctx.restore();
     // badges right of the bar
     let bx = x + w + 20;
     const badge = (icon, val, color) => {
@@ -244,6 +277,7 @@
     if (E.block > 0) badge('block', E.block, '#dff4ff');
     if (E.armorNow > 0) badge('armor', E.armorNow, '#e6e6f0');
     if (E.burn > 0) badge('burn', E.burn, '#ffb070');
+    if (E.final && E.strings) { drawFinalBar(ctx, E, x, y, w, h, t); numText(ctx, `${Math.max(0, Math.round(E.hpShown))}`, cx, y + h / 2 + 1, 14, '#fff6e8'); }
     // seals for the boss
     if (E.boss && E.maxSeals) {
       for (let k = 0; k < E.maxSeals; k++) {
@@ -254,6 +288,68 @@
       }
     }
   }
+
+  // 深淵の繰り手「四本の糸」: the HP bar is four strings (the first to go on the right); the current one glows with "あと N",
+  // a snapped one says so. Each string's knot sits where it snaps.
+  function drawFinalBar(ctx, E, x, y, w, h, t) {
+    const Art = SD.Art, S = E.strings;
+    ctx.save(); ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+    let hi = E.maxHp;
+    const segs = [];
+    S.forEach((s) => {
+      const lo = hi - s.hp, x0 = x + w * (lo / E.maxHp), x1 = x + w * (hi / E.maxHp);
+      const cur = E.hp > lo && E.hp <= hi, done = E.hp <= lo;
+      segs.push({ s, lo, x0, x1, cur, done });
+      if (cur) {
+        Art.roundRectPath(ctx, x0 - 2, y - 4, x1 - x0 + 4, h + 8, (h + 8) / 2);
+        ctx.lineWidth = 2.5; ctx.strokeStyle = `rgba(255,225,140,${0.65 + 0.35 * Math.sin(t * 4)})`; ctx.stroke();
+      }
+      if (lo > 0) {
+        ctx.strokeStyle = '#1a1222'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(x0, y - 5); ctx.lineTo(x0, y + h + 5); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x0, y + h / 2, 5, 0, Math.PI * 2); ctx.fillStyle = '#ffd257'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#1a1222'; ctx.stroke();
+      }
+      hi = lo;
+    });
+    // the labels: the current string in full (it may reach past a short segment); the others shorten to the room left
+    const say = (g, L, cx) => {
+      ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText(L, cx, y + h + 12);
+      ctx.fillStyle = g.cur ? '#ffe1a0' : g.done ? '#8a7a6a' : 'rgba(239,229,207,0.85)'; ctx.fillText(L, cx, y + h + 12);
+    };
+    ctx.textAlign = 'center';
+    let taken = null;
+    const cg = segs.find((g) => g.cur);
+    if (cg) {
+      ctx.font = `900 13.5px ${SD.Game.fontUI}`;
+      const L = `${cg.s.name}　あと ${Math.max(0, Math.round(E.hpShown - cg.lo))}`, lw = ctx.measureText(L).width;
+      const cx = Math.max(x + lw / 2, Math.min(x + w - lw / 2, (cg.x0 + cg.x1) / 2));
+      say(cg, L, cx); taken = [cx - lw / 2 - 8, cx + lw / 2 + 8];
+    }
+    ctx.font = `700 12.5px ${SD.Game.fontUI}`;
+    for (const g of segs) {
+      if (g.cur) continue;
+      let a = g.x0 + 3, b = g.x1 - 3;
+      if (taken && taken[1] > a && taken[0] < b) { if (taken[0] - a >= b - taken[1]) b = Math.min(b, taken[0]); else a = Math.max(a, taken[1]); }
+      const tail = g.done ? '切れた' : String(g.s.hp);
+      const L = [`${g.s.name}　${tail}`, `${g.s.heroName}　${tail}`, tail].find((c) => ctx.measureText(c).width <= b - a);
+      if (L) say(g, L, (a + b) / 2);
+    }
+    ctx.restore();
+  }
+
+  // 四本の糸: the symbols whose 三連 snaps the lifted hero's string, in one gold box (blue: the wards that only break the 溜め)
+  const liftWidth = (syms, s) => syms.length * (s + 2) + 8;
+  function liftChips(ctx, syms, x0, cy, s, blue) {
+    const Art = SD.Art, w = liftWidth(syms, s);
+    Art.roundRectPath(ctx, x0, cy - s / 2 - 2, w, s + 4, 5); ctx.fillStyle = blue ? 'rgba(18,34,48,0.96)' : 'rgba(48,34,10,0.96)'; ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = blue ? '#6fd3ff' : '#ffd257'; ctx.stroke();
+    syms.forEach((sym, k) => { if (Art.drawSymbol) Art.drawSymbol(ctx, sym, x0 + 4 + s / 2 + k * (s + 2), cy, s, {}); });
+    return w;
+  }
+  // a lift's two ways out: the lifted hero's 三連 snaps the string (gold); two wards break the 溜め, the string stays (blue)
+  const liftLines = (I) => [
+    { syms: I.lift.syms, txt: `の三連 → ${I.lift.name}を断つ`, blue: false },
+    { syms: ['ward'], txt: `2つ → ${I.liftNext || '強撃'}を崩す`, blue: true },
+  ];
 
   // a tiny brass padlock (the same motif as the reel clamp): "this cell is fixed in the script"
   function drawPadlock(ctx, x, y, s) {
@@ -351,6 +447,12 @@
         ctx.save(); ctx.strokeStyle = '#ff6a5a'; ctx.lineWidth = 3; ctx.lineCap = 'round';
         ctx.beginPath(); ctx.moveTo(x + 5, y + s - 5); ctx.lineTo(x + s - 5, y + 5); ctx.stroke(); ctx.restore();
       }
+      if (I.lift && c.role !== 'skip') { ctx.save(); const cw = liftWidth(I.lift.syms, 14); liftChips(ctx, I.lift.syms, cx - cw / 2, y + s + 10, 14); ctx.restore(); }
+      if (I.wardBreak && c.role !== 'skip') {
+        ctx.save(); Art.roundRectPath(ctx, x - 5, y - 7, 26, 15, 6); ctx.fillStyle = 'rgba(18,34,48,0.96)'; ctx.fill();
+        ctx.lineWidth = 1.4; ctx.strokeStyle = '#6fd3ff'; ctx.stroke(); ctx.restore();
+        numText(ctx, '盾2', x + 8, y + 1, 10, '#bfefff');
+      }
       if (c.role === 'skip' || c.role === 'debt') {
         ctx.save(); ctx.font = `900 11px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
         const tag = c.role === 'skip' ? '不発' : '借り';
@@ -381,6 +483,7 @@
       parts.push({ x: nx - nw / 2, dy: h / 2 - 45, w: nw, h: 75 }); // its label above, the badge (48) below
     }
     if (band) parts.push({ x: x + w + 6, dy: h / 2 - 40, w: bandWidth(band) + 20 + 55, h: 80 }); // caption, cells, 不発/借り tags (+ slide)
+    if (I.lift) { const tw = liftLineWidth(ctx, I); parts.push({ x: cx - tw / 2, dy: h + 4, w: tw, h: 46 }); }
     ctx.restore();
     return parts;
   }
@@ -409,6 +512,13 @@
       if (!moved) break;
     }
     return top;
+  }
+
+  function liftLineWidth(ctx, I) {
+    ctx.save(); ctx.font = `900 12px ${SD.Game.fontUI}`;
+    const w = Math.max(...liftLines(I).map((L) => liftWidth(L.syms, 16) + 5 + ctx.measureText(L.txt).width));
+    ctx.restore();
+    return w;
   }
 
   // intent bubble: a small hanging lantern-like plaque (+ the script band when it is on stage)
@@ -459,6 +569,18 @@
       ctx.fillStyle = '#bff0ff'; ctx.fillText(I.hint, cx, y - 33);
     }
     ctx.restore();
+    if (I.lift) {
+      // "[剣] の三連 → ブラムの糸を断つ" (gold) over "[盾] 2つ → 落としを崩す" (blue): snap the string, or only break the 溜め
+      ctx.save();
+      const tw = liftLineWidth(ctx, I), tx0 = cx - tw / 2;
+      ctx.font = `900 12px ${SD.Game.fontUI}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+      liftLines(I).forEach((L, k) => {
+        const ty = y + h + 16 + bob + k * 22, cw = liftChips(ctx, L.syms, tx0, ty, 16, L.blue);
+        ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText(L.txt, tx0 + cw + 5, ty);
+        ctx.fillStyle = L.blue ? '#bff0ff' : '#ffd257'; ctx.fillText(L.txt, tx0 + cw + 5, ty);
+      });
+      ctx.restore();
+    }
     if (I.debt) {
       ctx.save(); ctx.font = `900 12px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
       const lbl = '借りの一手';

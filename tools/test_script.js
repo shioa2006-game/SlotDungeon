@@ -4,6 +4,7 @@
  *   node tools/test_script.js unit       (unit tests only)
  *   node tools/test_script.js regress [runs]
  *   node tools/test_script.js bell [fights]  灰鐘の番人: the 構え / 大鐘 previews against random play (sends, borrows, 連鎖)
+ *   node tools/test_script.js kurite [fights] 深淵の繰り手「四本の糸」(B17): the lift cut, the strings of the HP bar — previews against random play
  * The regression baseline is the vertical-slice commit (git 89b29f1); it is loaded side by side in its own VM context. */
 'use strict';
 const path = require('path');
@@ -950,6 +951,123 @@ function unit() {
     ok(rp && Ts.strikeHp === rp.hp && Ts.strikeHp === 200 - Rs.reaper && oldEst === 200, `死神 through a shell: 発動後 ${Ts.strikeHp} (exact), where the old estimate said ${oldEst}`);
   }
 
+  section('深淵の繰り手「四本の糸」: the HP bar is four strings; on 吊り上げ the lifted hero\'s 三連 snaps the string');
+  {
+    const K = D.ENEMIES.kurite;
+    eq([K.hp, K.marks, K.strings.map((s) => s.hp), K.strings.map((s) => s.syms.join('/'))], [1100, [900, 650, 500], [200, 250, 150, 500], ['blade', 'flame', 'heart', 'blade/flame/heart']], 'strings 200 / 250 / 150 / 500, snapping at 900 / 650 / 500; wards snap none');
+    eq(K.acts, ['糸の段', '面の段', '祈りの段', '終幕の段'], 'four acts');
+    const ALL3 = D.SKILLS.map((s) => s.id).filter((id) => id !== 'chain');
+    const kur3 = (o) => fightRun(SD, ALL3, 'kurite', 17, Object.assign({ sparks: 2, seed: 71 }, o || {}));
+    const at = (run, act, step, hp) => { const e = run.enemy; e.phase = act; e.phaseFor = act; e.phaseAt = 0; e.cursor = step; e.hp = hp; e.intent = run._readCell(e); e.now = e.intent.now || null; };
+    const turn = (run, syms) => { run.spin(); setPayline(run, syms); const F = run.forecast(), P = run.previewTurn(); return { F, P, ev: run.resolve() }; };
+    {
+      const run = kur3(), e = run.enemy;
+      eq([e.intent.label, !!e.intent.lift, e.now], ['糸引き', false, null], 'act 1 opens with 糸引き 28: no lift, no seal');
+      run.spin();
+      ok(run.canHold(0), 'holds work as everywhere');
+    }
+    {
+      const run = kur3(), e = run.enemy;
+      at(run, 1, 1, 1000);
+      eq([e.intent.label, run.liftOf(e.intent).name], ['吊り上げ', 'ブラムの糸'], 'act 1 cell 2: 吊り上げ lifts Bram');
+      const { F, P, ev } = turn(run, ['blade', 'blade', 'blade']);
+      ok(F.cut && F.cut.name === 'ブラムの糸' && F.cutMark === 900, 'a blade 三連 on Bram\'s lift snaps his string (forecast)');
+      const sc = ev.find((x) => x.t === 'stringCut');
+      ok(sc && sc.string === 'ブラムの糸' && sc.hp === 900 && !sc.last, 'resolve: the string snaps at 900');
+      eq([e.phase, e.intent.label, run.sparks], [2, '面打ち', run.maxSparks], 'act 2 starts at its first cell, sparks full');
+      ok(!ev.some((x) => x.t === 'staggerCancel') && !ev.some((x) => x.t === 'enemyAttack' && x.heavy), 'the act changed: 落とし never comes');
+      eq(P.enemyAfter && P.enemyAfter.hp, e.hp, 'preview == actual (HP)');
+      eq(P.next && P.next.label, e.intent.label, 'preview == actual (the next cell is the new act\'s first)');
+      const ch = ev.find((x) => x.t === 'enemyCharge');
+      ok(ch && ch.stale === true, 'the old act\'s 吊り上げ still takes the boss\'s turn, marked stale (nothing is shown)');
+    }
+    {
+      // 連鎖: the snap and the act change come before the bonus spin (the snap is read first)
+      const run = fightRun(SD, D.SKILLS.map((s) => s.id), 'kurite', 17, { sparks: 2, seed: 91 }), e = run.enemy;
+      at(run, 1, 1, 1000);
+      const { ev } = turn(run, ['blade', 'blade', 'blade']);
+      const iS = ev.findIndex((x) => x.t === 'stringCut'), iP = ev.findIndex((x) => x.t === 'bossPhase'), iC = ev.findIndex((x) => x.t === 'chain');
+      ok(iS >= 0 && iP > iS && iC > iP, 'with 連鎖: stringCut, then the act change, then the bonus spin');
+      ok(ev.filter((x) => x.t === 'stringCut').length === 1 && e.hp <= 900, '...and the bonus line never snaps the next string');
+    }
+    {
+      const run = kur3({ seed: 73 }), e = run.enemy;
+      at(run, 1, 1, 1000);
+      const { F, ev } = turn(run, ['ward', 'ward', 'ward']);
+      ok(!F.cut && F.staggerWard, 'a ward 三連 on Bram\'s lift: it breaks the 溜め — wards never snap a string');
+      ok(!ev.some((x) => x.t === 'stringCut') && e.phase === 1 && ev.some((x) => x.t === 'staggerCancel' && x.skipped.label === '落とし'), '...落とし is struck out, the string stays (act 1 goes on)');
+      const r3 = kur3({ seed: 74 });
+      at(r3, 4, 2, 400);
+      const t3 = turn(r3, ['ward', 'ward', 'ward']);
+      ok(!t3.F.cut && r3.phase !== 'won' && r3.enemy.hp > 0 && t3.ev.some((x) => x.t === 'staggerCancel' && x.skipped.label === '終幕'), 'a ward 三連 on 最後の糸: no snap, no win — 終幕 is struck out');
+    }
+    {
+      const run = kur3({ seed: 75 }), e = run.enemy;
+      at(run, 1, 1, 1000);
+      const { F, ev } = turn(run, ['flame', 'flame', 'flame']);
+      ok(!F.cut && !ev.some((x) => x.t === 'stringCut') && e.phase === 1, 'a flame 三連 does not snap Bram\'s string (only damage)');
+      const r2 = kur3({ seed: 77 });
+      at(r2, 1, 1, 1000);
+      const t2 = turn(r2, ['heart', 'flame', 'blade']);
+      ok(t2.F.cut && t2.ev.some((x) => x.t === 'stringCut'), '絆の陣 snaps any lifted string');
+    }
+    {
+      const run = kur3({ seed: 79 }), e = run.enemy;
+      at(run, 1, 1, 1000);
+      const { F, ev } = turn(run, ['ward', 'heart', 'ward']);
+      const sk = ev.find((x) => x.t === 'staggerCancel');
+      ok(!F.cut && F.staggerWard && sk && sk.skipped.label === '落とし', 'two wards (盾他盾) break 吊り上げ: 落とし is struck out');
+      eq(e.intent.label, '糸引き', '...and the act goes on');
+      const r2 = kur3({ seed: 81 });
+      at(r2, 4, 2, 400);
+      const t2 = turn(r2, ['blade', 'ward', 'ward']);
+      ok(t2.F.staggerWard && t2.ev.some((x) => x.t === 'staggerCancel' && x.skipped.label === '終幕'), 'two wards break 最後の糸 too: no exceptions');
+    }
+    {
+      const run = kur3({ seed: 83 }), e = run.enemy;
+      at(run, 2, 1, 800);
+      eq(run.liftOf(e.intent).name, 'ルゥの糸', 'act 2 cell 2 lifts Lu');
+      const t1 = turn(run, ['blade', 'blade', 'blade']);
+      ok(!t1.F.cut, 'a blade 三連 does not snap Lu\'s string');
+      const r2 = kur3({ seed: 85 });
+      at(r2, 2, 1, 800);
+      const t2 = turn(r2, ['flame', 'flame', 'flame']);
+      ok(t2.F.cut && r2.enemy.hp <= 650 && r2.enemy.phase === 3 && r2.enemy.intent.label === '吊り上げ' && r2.liftOf(r2.enemy.intent).name === 'トトの糸', 'a flame 三連 snaps Lu\'s string: 祈りの段 opens on トト\'s lift');
+    }
+    {
+      // 祈りの段: トト is lifted on its first cell; 癒 snaps his string, a blade 三連 does not
+      const run = kur3({ seed: 86 }), e = run.enemy;
+      at(run, 3, 0, 600);
+      eq([e.intent.label, run.liftOf(e.intent).name, run.liftOf(e.intent).syms], ['吊り上げ', 'トトの糸', ['heart']], 'act 3 (祈りの段) cell 1 lifts トト');
+      ok(!turn(run, ['blade', 'blade', 'blade']).F.cut, 'a blade 三連 does not snap トト\'s string');
+      const r2 = kur3({ seed: 88 });
+      at(r2, 3, 0, 600);
+      const t2 = turn(r2, ['heart', 'heart', 'heart']);
+      ok(t2.F.cut && r2.enemy.hp <= 500 && r2.enemy.phase === 4 && r2.enemy.intent.label === '秒読み・三', 'a 癒 三連 snaps トト\'s string: 終幕の段 from 秒読み・三');
+    }
+    {
+      const run = kur3({ seed: 87 }), e = run.enemy;
+      at(run, 4, 2, 400);
+      const { F, ev } = turn(run, ['heart', 'heart', 'heart']);
+      ok(F.cut && F.cutMark === 0 && ev.some((x) => x.t === 'stringCut' && x.last) && e.hp === 0 && run.phase === 'won', '最後の糸: a 剣・焔・癒 三連 (here 癒) snaps it — the run is won');
+    }
+    {
+      const run = kur3({ seed: 89 }), e = run.enemy;
+      at(run, 1, 0, 520);
+      const ev = turn(run, ['blade', 'blade', 'blade']).ev;
+      ok(e.hp < 500 && e.phase === 4 && ev.filter((x) => x.t === 'bossPhase').length === 1 && run.sparks === run.maxSparks, 'damage runs on: crossing three marks goes straight to 終幕の段');
+      const r2 = kur3({ seed: 91 }), e2 = r2.enemy;
+      at(r2, 4, 0, 5);
+      const ev2 = turn(r2, ['blade', 'blade', 'flame']).ev;
+      ok(e2.hp === 0 && r2.phase === 'won', 'no HP floor: damage alone fells it');
+      // a 連鎖 second line: the first line already took Bram's string below its mark (the act changes only after both lines)
+      const r3 = kur3({ seed: 93 }), e3 = r3.enemy;
+      at(r3, 1, 1, 1000); r3.spin(); e3.hp = 890;
+      setPayline(r3, ['blade', 'blade', 'blade']);
+      ok(!r3.forecast().cut, 'a string that damage already snapped is not cut again: the lift never reaches the next string');
+    }
+  }
+
   section('save / load: old saves load, new fields default safely');
   {
     const store = {};
@@ -1198,10 +1316,78 @@ function bellFuzz(N) {
   ok(bad === 0 && tally.brokenByHits > 50 && tally.brokenByWards > 20 && tally.held > 50 && tally.chainBreaks > 0 && tally.sends > 50 && tally.borrows > 50, `灰鐘の番人: previews == actual (${bad} mismatches)`);
 }
 
+// ================================================================== 深淵の繰り手「四本の糸」 fuzz: the lift cut and the strings, exactly as previewed
+function kuriteFuzz(N) {
+  section(`深淵の繰り手「四本の糸」 fuzz: ${N} fights, random acts / HP and random play (nudges, 再演, holds, keys, 写し身, sends, borrows, 連鎖)`);
+  const SD = currentSD();
+  const D = SD.Data, K = D.ENEMIES.kurite;
+  const R = SD.Util.makeRng(5151);
+  const clean = (x) => JSON.stringify(x, (k, v) => (k === 'random' ? undefined : v));
+  let bad = 0, resolves = 0;
+  const T = { cuts: 0, cutByChain: 0, falls: 0, staggers: 0, acts: 0, sends: 0, borrows: 0, damageSnaps: 0 };
+  const fail = (m) => { bad++; if (bad <= 6) console.log('  ✗ ' + m); };
+  const actOf = (hp) => 1 + K.marks.filter((m) => hp <= m).length;
+  for (let n = 0; n < N; n++) {
+    const ids = D.SKILLS.filter(() => R.chance(0.85)).map((s) => s.id).concat(['nudge', 'respin', 'hyoshigi', 'borrow']);
+    const run = fightRun(SD, ids, 'kurite', 17, { seed: 1900 + n });
+    const e = run.enemy;
+    e.hp = R.pick([1100, 1000, 900, 860, 800, 700, 600, 560, 500, 300, 120, 30]);
+    e.phase = actOf(e.hp); e.phaseFor = e.phase; e.phaseAt = 0; e.cursor = R.int(8);
+    e.intent = run._readCell(e); e.now = null;
+    run.hp = Math.max(10, Math.round(run.maxHp * (0.3 + R.next() * 0.7)));
+    run.sparks = R.int(run.maxSparks + 1);
+    for (let t = 0; t < 30 && run.phase === 'idle' && run.enemy === e; t++) {
+      run.spin();
+      for (let a = 0; a < 4 && run.phase === 'spun'; a++) {
+        const k = R.int(8);
+        if (k === 0 && run.canAdvance()) { run.advance(); T.sends++; }
+        else if (k === 1 && run.canBorrow()) { run.borrow(); T.borrows++; }
+        else if (k === 2 && run.canNudgeAny()) { const i = R.int(3), d = R.pick([-2, -1, 1, 2]); if (run.canNudge(i, d)) run.nudge(i, d); }
+        else if (k === 3 && run.canRespin()) { for (let i = 0; i < 3; i++) if (R.chance(0.4) && run.canHold(i)) run.toggleHold(i); run.respin(); }
+        else if (k === 4 && run.canEchoAny()) { for (let s = 0; s < 3; s++) for (let u = 0; u < 3; u++) if (run.phase === 'spun' && run.canEcho(s, u) && R.chance(0.3)) run.echo(s, u); }
+        else if (k === 5 && run.canFateKey()) { const i = R.int(3); if (run.canFateKey(i)) run.fateKey(i, R.int(run.reels[i].strip.length)); }
+        else if (k === 6 && run.canBlessAny()) { for (let i = 0; i < 3; i++) if (run.canBless(i)) { run.bless(i); break; } }
+      }
+      if (run.phase !== 'spun') break;
+      // (as a player would: on a lift, often line up the lifted hero's 三連 — random play alone rarely does)
+      const lift0 = run.liftOf(e.intent);
+      if (lift0 && R.chance(0.5)) { const sym = R.pick(lift0.syms); setPayline(run, [sym, sym, sym]); }
+      const ph0 = e.phase, it0 = e.intent, F = run.forecast(), P = run.previewTurn(), B = run.scriptBand();
+      const nx = B && B.cells.find((c) => c.role === 'next');
+      const ev = run.resolve();
+      resolves++;
+      const sc = ev.filter((x) => x.t === 'stringCut'), chained = ev.some((x) => x.t === 'chain'), died = ev.some((x) => x.t === 'enemyDie');
+      T.cuts += sc.length; if (died) T.falls++;
+      if (ev.some((x) => x.t === 'staggerCancel')) T.staggers++;
+      if (ev.some((x) => x.t === 'bossPhase')) { T.acts++; if (!sc.length) T.damageSnaps++; }
+      if (sc.length > 1) fail(`fight ${n}: two strings snapped by lifts in one turn`);
+      if (F.cut && !sc.length && !died) fail(`fight ${n} turn ${t}: the forecast snapped ${F.cut.name}, the resolve did not`);
+      if (!F.cut && sc.length) { if (chained) T.cutByChain++; else fail(`fight ${n} turn ${t}: a string snapped that the forecast did not show`); }
+      for (const x of sc) { const L0 = run.liftOf(it0, e), own = L0 ? (K.marks[it0.lift - 1] || 0) : 0; if (!L0 || x.string !== L0.name || (x.dmg > 0 && x.hp !== own)) fail(`fight ${n} turn ${t}: ${x.string} snapped to ${x.hp} on ${it0.label} (its own mark ${own})`); }
+      if (sc.length && !run.liftOf(it0, Object.assign({}, e, { id: 'kurite' }))) fail(`fight ${n}: a string snapped on a cell that lifts no one (${it0.label})`);
+      if (ev.some((x) => x.t === 'bossPhase') && run.enemy === e && run.sparks !== run.maxSparks) {
+        // (sparks used after the act change cannot happen in the same resolve)
+        fail(`fight ${n}: an act change did not fill the sparks (${run.sparks}/${run.maxSparks})`);
+      }
+      if (run.enemy === e && e.hp > 0 && run.phase !== 'dead' && e.phase !== Math.max(ph0, actOf(e.hp))) fail(`fight ${n}: act ${e.phase} at HP ${e.hp}`);
+      if (!P.random) {
+        if (P.enemyDies !== died) fail(`fight ${n} turn ${t}: dies preview ${P.enemyDies} actual ${died}`);
+        if (!(run.hp === P.hpAfter || (P.partyDies && run.phase === 'dead'))) fail(`fight ${n} turn ${t}: party HP preview ${P.hpAfter} actual ${run.hp}`);
+        if (P.enemyAfter && run.enemy === e && e.hp !== P.enemyAfter.hp) fail(`fight ${n} turn ${t}: enemy HP preview ${P.enemyAfter.hp} actual ${e.hp}`);
+        if (nx && !nx.cond && !nx.unknown && run.enemy === e && run.phase === 'idle' && clean(nx.it) !== clean(e.intent)) fail(`fight ${n} turn ${t}: band next ${clean(nx.it)} actual ${clean(e.intent)}`);
+      }
+      if (run.enemy === e && run.phase === 'idle' && e.hp <= 0) fail(`fight ${n}: enemy hp ${e.hp} while the fight goes on`);
+    }
+  }
+  console.log(`  resolves ${resolves}; strings snapped by lifts ${T.cuts} (by a 連鎖 line ${T.cutByChain}), acts changed ${T.acts} (by damage alone ${T.damageSnaps}), 溜め broken ${T.staggers}, falls ${T.falls}; sends ${T.sends}, borrows ${T.borrows}`);
+  ok(bad === 0 && T.cuts > 200 && T.falls > 100 && T.staggers > 40 && T.damageSnaps > 60 && T.sends > 100 && T.borrows > 50, `深淵の繰り手「四本の糸」: previews == actual (${bad} mismatches)`);
+}
+
 const mode = process.argv[2] || 'all';
 if (mode === 'all' || mode === 'unit') unit();
 if (mode === 'all' || mode === 'regress') regress(+process.argv[3] || 400);
 if (mode === 'all' || mode === 'boss') bossFuzz(+process.argv[3] || 600);
 if (mode === 'all' || mode === 'bell') bellFuzz(+process.argv[3] || 1200);
+if (mode === 'all' || mode === 'kurite') kuriteFuzz(+process.argv[3] || 1500);
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

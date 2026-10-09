@@ -354,6 +354,10 @@ small { font-size: 0.78em; opacity: 0.85; }
 .wanted .w-lbl { font-weight: 900; color: var(--gold); margin-right: 4px; }
 .wanted.avoid { background: rgba(197,139,255,0.10); border-color: rgba(197,139,255,0.5); }
 .wanted.avoid .w-lbl { color: var(--weave); }
+/* 四本の糸: a lift has two rows — 断つ (gold, as above) and 守る (blue: two wards break the 溜め, the string stays) */
+.run-left.final .wanted { margin-top: 6px; padding: 4px 8px; }
+.wanted.guard { background: rgba(111,211,255,0.08); border-color: rgba(111,211,255,0.45); }
+.wanted.guard .w-lbl { color: #6fd3ff; }
 .wanted .w-txt { color: var(--bone); }
 .goal-bar { position: absolute; right: 40px; top: 58px; display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 10px; border-radius: 8px; background: rgba(20,14,28,0.82); border: 1px solid rgba(232,191,106,0.45); }
 .goal-bar .g-lbl { color: var(--bone-dim); }
@@ -434,6 +438,11 @@ kbd { font-size: 12px; }
 .script-row .btn { white-space: nowrap; padding-left: 6px; padding-right: 6px; }
 .fc-in .debt { color: #ff9a8a; }
 .fc-in .lethal { color: #ff5d6b; font-size: 15px; }
+/* 深淵の繰り手: the strings (四本の糸) */
+.fc-thread { color: #ffe1a0; }
+.fc-thread b { color: #ffd257; }
+.fc-thread b.three { color: #fff0b0; font-size: 15px; text-shadow: 0 0 10px rgba(255,200,90,0.8); }
+.run-left.final { height: 254px; max-height: 254px; overflow-y: auto; } /* B17: a fixed height, below the stage's edge */
 .fc-pause { margin-top: 5px; font-size: 12.5px; color: var(--candle); border-top: 1px dashed rgba(232,191,106,0.3); padding-top: 4px; }
 .fc-in .back { color: var(--ward); }
 .fc-out small.when { font-size: 11px; color: var(--bone-dim); font-weight: 400; }

@@ -529,8 +529,10 @@
 
     _enemySnap() {
       const e = this.enemy;
-      return { id: e.id, art: e.art, variant: e.variant, name: e.name, hp: e.hp, maxHp: e.maxHp, armor: e.armor, block: e.block,
+      const snap = { id: e.id, art: e.art, variant: e.variant, name: e.name, hp: e.hp, maxHp: e.maxHp, armor: e.armor, block: e.block,
         burn: e.burn, seals: e.seals, maxSeals: e.maxSeals, phase: e.phase, dread: e.dread, elite: e.elite, boss: e.boss, doom: e.doom };
+      if (D().ENEMIES[e.id].final) snap.final = true;
+      return snap;
     }
 
     // the first cell of a fight's script (cursor 0)
@@ -606,6 +608,7 @@
       this.fight.paidRespins = 0;
       this.fight.manipulated = false;
       this.fight.advanced = false;
+      this.fight.liftCut = false;
       this.stats.spins += 1;
       this.phase = 'spun';
       // Run 1: "the Emberwheel awakens" — guarantee one free, guided nudge into a trine early on.
@@ -700,6 +703,20 @@
       if (R.groups.ward && R.groups.ward.n >= 2 && !(it && (it.k === 'attack' || it.k === 'doom' || it.k === 'jam' || it.k === 'charge'))) return 'idleWard';
       if (this.canAdvance()) return 'script';
       return 'plan';
+    }
+
+    // ------------------------------------------------------------------ 深淵の繰り手「四本の糸」(docs/EXPANSION_4B_PROMISE.md)
+    // the string a 吊り上げ cell pulls (or null), and the HP at which the current string snaps (0: the last one)
+    liftOf(it, e) {
+      e = e || this.enemy;
+      const ED = e && e.id && D().ENEMIES[e.id];
+      return it && it.lift && ED && ED.strings ? ED.strings[it.lift - 1] : null;
+    }
+    nextMark(e) {
+      e = e || this.enemy;
+      const ED = e && e.id && D().ENEMIES[e.id];
+      for (const m of (ED && ED.marks) || []) if (e.hp > m) return m;
+      return 0;
     }
 
     respinCost() {
@@ -1050,7 +1067,7 @@
         bladeRaw: 0, bladeArmor: 0, blade: 0, flame: 0, skullDmg: 0, reaper: 0, selfDmg: 0,
         block: 0, heal: 0, embers: 0, sparks: 0, burn: 0, pyre: 0, cleanse: false, rampart: false, guardian: false,
         stagger: false, staggerWard: false, staggerBreak: false, shellNeed: 0, executed: false, sealBreaks: 0, sealedAfter: false, sealMult: 1, armor: 0,
-        directDmg: 0, totalDmg: 0, utility: 0,
+        directDmg: 0, totalDmg: 0, utility: 0, cut: null, cutMark: 0, cutDmg: 0,
       };
       if (f.momentum && f.resolves === 0) { res.mult *= 1.5; res.multNotes.push('追撃 ×1.5'); }
       if (m.lastStand && this.hp <= this.maxHp * 0.3) { res.mult *= 1.5; res.multNotes.push('背水 ×1.5'); }
@@ -1145,11 +1162,33 @@
         res.shellNeed = Math.max(0, (e.block || 0) + 1 - direct);
         if (direct > (e.block || 0)) { res.staggerBreak = true; res.stagger = true; }
       }
+      // 四本の糸: on a 吊り上げ cell, a 三連 / 四連 of the lifted hero's symbol, or 絆, snaps the string being pulled at once
+      // (the lifted hero's OWN string ends at its mark, the last one at 0: a string that damage already snapped — e.g. by
+      // the first line before a 連鎖 line — is not cut again, and the cut never reaches the next string)
+      const lift = this.liftOf(e.intent, e);
+      const EDl = lift && D().ENEMIES[e.id];
+      const ownMark = lift ? ((EDl.marks && EDl.marks[e.intent.lift - 1]) || 0) : 0;
+      if (lift && e.hp > ownMark && !f.liftCut &&
+        res.combos.some((c) => c.k === 'bond' || ((c.k === 'trine' || c.k === 'quad') && lift.syms.indexOf(c.s) >= 0))) {
+        res.cut = lift;
+        res.cutMark = ownMark;
+        res.cutDmg = Math.max(0, e.hp - res.cutMark - res.totalDmg);
+        res.totalDmg += res.cutDmg;
+      }
       // utility: used for Wild assignment and by bots
       const incoming = e.intent && e.intent.k !== 'charge' ? this.intentDamage(e.intent) : 0;
+      let dmgU = res.totalDmg;
+      // (bots, 四本の糸 only) a broken 溜め or a snapped string also spares you the blow it was winding up. Not while a 星 is
+      // being assigned (wildAs given): a 星 chooses by the same measure as against every other enemy.
+      const ED0 = e.id && D().ENEMIES[e.id];
+      if (ED0 && ED0.strings && wildAs === undefined && e.intent && e.intent.k === 'charge') {
+        const avoided = Math.max(0, this.intentDamage(e.intent) - this.block);
+        if (res.staggerWard || res.cut) dmgU += 0.8 * avoided;
+        if (res.cut && res.cutMark === 0) dmgU += 40;
+      }
       const blockUse = Math.min(res.block, Math.max(0, incoming - this.block)) + Math.max(0, res.block - incoming) * 0.15;
       const reflectPenalty = now && now.k === 'reflect' ? res.totalDmg * 0.5 : 0;
-      res.utility = res.totalDmg + blockUse * 0.9 + Math.min(res.heal, this.maxHp - this.hp) * 0.8 + res.embers * 0.2
+      res.utility = dmgU + blockUse * 0.9 + Math.min(res.heal, this.maxHp - this.hp) * 0.8 + res.embers * 0.2
         + res.sparks * 4 + res.burn * 1.5 + res.sealBreaks * 30 + (res.stagger ? 10 : 0) + (res.guardian ? incoming : 0)
         - res.selfDmg * 1.2 - reflectPenalty;
       return res;
@@ -1165,6 +1204,8 @@
       if (this.fight) this.fight.borrowed = 0;
       const out = this._resolveLine(ev, false);
       if (out === 'end') return ev;
+      // 四本の糸: a snapped string changes the act before the 連鎖 spins (the snap is read first; nothing else differs)
+      if (this.fight && this.fight.liftCut) this._checkBossPhase(ev);
       // 連鎖: one bonus spin + resolve before the enemy acts
       if (this.mods.chain && this._lastHadCombo && !this.fight.chainUsed && this.enemy && this.enemy.hp > 0 && this.reels.some((r) => !r.held && !r.jam)) {
         this.fight.chainUsed = true;
@@ -1185,6 +1226,7 @@
 
     _endPlayerTurn() {
       const m = this.mods;
+      if (this.fight) this.fight.liftCut = false;
       for (let i = 0; i < this.reels.length; i++) {
         const r = this.reels[i];
         r.jam = false; r.echo = null;
@@ -1315,6 +1357,14 @@
         const r = hit(Math.round(e.burn * 2 * (e.seals > 0 ? 0.5 : 1)), 'burn');
         ev.push({ t: 'pyre', dmg: r.dmg, hp: e.hp, stacks: e.burn });
       }
+      // 四本の糸: the lifted hero's combo snaps the string being pulled
+      if (R.cut && e.hp > 0 && !f.liftCut) {
+        f.liftCut = true;
+        const before = e.hp;
+        e.hp = Math.min(e.hp, R.cutMark);
+        dealt += before - e.hp;
+        ev.push({ t: 'stringCut', string: R.cut.name, hero: R.cut.hero, dmg: before - e.hp, hp: e.hp, last: R.cutMark === 0 });
+      }
       if (D().ENEMIES[e.id].mirror && e.hp > 0) this._mirrorAfter(R);
       f.rampart = f.rampart || R.rampart;
       f.wardReflect = f.wardReflect || R.wardReflect;
@@ -1345,11 +1395,15 @@
       const e = this.enemy;
       if (!e || !e.boss || e.hp <= 0) return;
       let np = e.phase;
-      if (e.seals <= 0 && np === 1) np = 2;
-      if (e.seals <= 0 && e.hp <= e.maxHp * 0.3) np = 3;
+      const ED = D().ENEMIES[e.id], MK = ED.marks;
+      if (MK) np = Math.max(np, 1 + MK.filter((m) => e.hp <= m).length); // (one act per mark passed)
+      else {
+        if (e.seals <= 0 && np === 1) np = 2;
+        if (e.seals <= 0 && e.hp <= e.maxHp * 0.3) np = 3;
+      }
       if (np !== e.phase) {
         e.phase = np;
-        const d = this._gainSparks(1);
+        const d = this._gainSparks(ED.refill ? this.maxSparks : 1);
         ev.push({ t: 'bossPhase', phase: np, sparks: this.sparks, gained: d });
       }
     }
@@ -1386,7 +1440,7 @@
       // 怯み: the heavy follow-up is struck from the script unplayed
       if (e.staggered) {
         e.staggered = false;
-        if (it.k === 'charge') {
+        if (it.k === 'charge' && !(it.ph && it.ph !== e.phase)) {
           const skipped = this._nextCell(e);
           Run.scriptTick(e, skipped);
           e.lastK = 'staggered';
@@ -1475,7 +1529,7 @@
           break;
         }
         case 'doom': ev.push(this._attackParty(atk(it.v), true)); ev.push({ t: 'doom', n: 0, fired: true }); break;
-        case 'charge': ev.push({ t: 'enemyCharge', label: it.label }); if (it.guard) { e.block += it.guard; ev.push({ t: 'enemyGuard', block: e.block }); } break;
+        case 'charge': ev.push(it.ph && it.ph !== e.phase ? { t: 'enemyCharge', label: it.label, stale: true } : { t: 'enemyCharge', label: it.label }); /* stale: a lift of an act that has already ended */ if (it.guard) { e.block += it.guard; ev.push({ t: 'enemyGuard', block: e.block }); } break;
         case 'guard': e.block += it.v; ev.push({ t: 'enemyGuard', block: e.block }); break;
         case 'heal': {
           const b = e.hp; e.hp = Math.min(e.maxHp, e.hp + it.v);
@@ -1551,7 +1605,7 @@
         let enemyTurn = false, lastCause = 'strike';
         for (const x of ev) {
           if (x.t === 'enemyTurn') enemyTurn = true;
-          if (!enemyTurn && x.hp != null && ((x.t === 'act' && (x.sym === 'blade' || x.sym === 'flame' || x.sym === 'skull')) || x.t === 'reaper' || x.t === 'pyre')) P.strikeHp = x.hp;
+          if (!enemyTurn && x.hp != null && ((x.t === 'act' && (x.sym === 'blade' || x.sym === 'flame' || x.sym === 'skull')) || x.t === 'reaper' || x.t === 'pyre' || x.t === 'stringCut')) P.strikeHp = x.hp;
           if (enemyTurn && x.t === 'burnTick') { P.burnTick += x.dmg; lastCause = 'burn'; }
           if (enemyTurn && x.t === 'enemyHeal') P.healed += x.amount;
           if (enemyTurn && x.t === 'enemyAttack' && x.thorns) { P.thornsBack += x.thorns; lastCause = 'thorns'; }
@@ -1610,7 +1664,8 @@
     // A read-only copy of what ai() reads, for walking the script forward.
     _ghostOf(e) {
       return { id: e.id, boss: !!e.boss, hp: e.hp, maxHp: e.maxHp, turn: e.turn, cursor: e.cursor || 0, lastK: e.lastK, doom: e.doom,
-        markIdx: e.markIdx, phase: e.phase, seals: e.seals, atkBonus: e.atkBonus, atkMult: e.atkMult, mirrorSym: e.mirrorSym };
+        markIdx: e.markIdx, phase: e.phase, seals: e.seals, atkBonus: e.atkBonus, atkMult: e.atkMult, mirrorSym: e.mirrorSym,
+        phaseFor: e.phaseFor, phaseAt: e.phaseAt };
     }
     // Read the next cell on a copy. Dice are never rolled: a cell that needs them comes back unknown.
     _ghostNext(g) {
@@ -1703,6 +1758,8 @@
       this.lastFightTurns = this.fight.turn + 1;
       if (e.boss) {
         this.bossHpPct = 0;
+        // 深淵の繰り手: the true final boss ends the run as won (the 真のクリア record and the ending come in stage 4d)
+        if (D().ENEMIES[e.id].final) return ev.concat(this._win());
         // 第三層から: the skipped floors are paid back only when the run gets this far
         if (sc && sc.bossEmbers) { this._gainEmbers(sc.bossEmbers, 'shortcut'); ev.push({ t: 'embers', amount: sc.bossEmbers, total: this.embers, src: 'shortcut' }); }
         return ev.concat(this.mods.deepUnlocked && !this.deep ? this._settleBoss() : this._win());

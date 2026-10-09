@@ -146,6 +146,15 @@
     shift: '盾2つで手前の強撃を不発にすると、ここは1コマ繰り上がる',
     mirror: '返し鏡の封じは、その前の発動で決まる（まだ決まっていない）',
   };
+  // ---------------------------------------------------------------- 深淵の繰り手「四本の糸」
+  UI.isFinal = (run) => { const D = run && run.enemy && SD.Data.ENEMIES[run.enemy.id]; return !!(D && D.final); };
+  // what a 吊り上げ cell lets you do
+  UI.liftExplain = (run, it) => {
+    const lift = run && run.liftOf ? run.liftOf(it) : null;
+    if (!lift) return null;
+    return `<b>吊り上げ</b>：${lift.heroName}が吊られる。このターン、${lift.syms.map((s) => UI.symName(s)).join('か')}の三連か絆を出すと、${lift.name}が残りごと一気に切れる。盾2つなら${it.nextLabel || '強撃'}を崩せる（盾では糸は切れない）`;
+  };
+
   // icon / value / corner badges for one script cell { role, it, dmg, unknown, cond, locked }
   UI.cellInfo = (run, c) => {
     const it = (c && c.it) || {};
@@ -173,6 +182,10 @@
     }
     if (c && c.cond === 'mirror') { I.sym = null; I.now = 'mark'; I.markUnknown = true; } // the seal is not decided yet
     if (it.guard && (it.k === 'attack' || it.k === 'charge')) I.guard = it.guard;
+    // 四本の糸: the lifted hero's symbols; any 溜め of the final boss breaks to two wards (no exceptions)
+    const lift = run && run.liftOf ? run.liftOf(it) : null;
+    if (lift) I.lift = lift;
+    if (UI.isFinal(run) && it.k === 'charge') I.wardBreak = true;
     return I;
   };
   UI.cellExplain = (run, c) => {
@@ -183,9 +196,11 @@
     if (c.role === 'debt') lines.push('<b>借りの代償</b>：灰輪はこの一手も、このターンのうちに行う');
     const enm = run.enemy ? SD.Data.ENEMIES[run.enemy.id].name : '返し鏡';
     if (c.cond === 'mirror') lines.push(`<span style="color:#e2c8ff"><b>封じ：？</b>　${enm}は、その前の発動でいちばん多く働いた記号を封じる。回した後は「次」の封じが確定して表示される</span>`);
-    if (c.cond) lines.push(`<span style="color:#e2c8ff">？ ${c.cond === 'mirror' ? enm + 'の封じは、その前の発動で決まる（まだ決まっていない）' : (breaks(run) && UI.BAND_COND_BREAK[c.cond]) || UI.BAND_COND[c.cond] || '変わる可能性がある'}</span>`);
+    const condText = c.cond === 'hp' && UI.isFinal(run) ? '糸が切れると（吊り上げで断っても、削り切っても）段が変わり、台本は書き換わる' : null;
+    if (c.cond) lines.push(`<span style="color:#e2c8ff">？ ${c.cond === 'mirror' ? enm + 'の封じは、その前の発動で決まる（まだ決まっていない）' : condText || (breaks(run) && UI.BAND_COND_BREAK[c.cond]) || UI.BAND_COND[c.cond] || '変わる可能性がある'}</span>`);
     if (c.locked && run.mods.script) lines.push('<span style="color:#e8bf6a">溜め終えた一撃は台本から外せない（早めることはできる）</span>');
-    if (c.actChange) lines.push(`<span style="color:#e2c8ff"><b>幕</b>：この発動で灰輪は第${c.actChange}幕へ移り、台本が書き換わる。これは新しい幕のコマで、台本送りでは届かない（送ると今の幕の次のコマになる）</span>`);
+    if (c.actChange) lines.push(UI.isFinal(run) ? `<span style="color:#e2c8ff"><b>段</b>：この発動で繰り手は${(SD.Data.ENEMIES[run.enemy.id].acts || [])[c.actChange - 1] || ''}へ移り、台本が書き換わる。これは新しい段のコマで、台本送りでは届かない</span>`
+      : `<span style="color:#e2c8ff"><b>幕</b>：この発動で灰輪は第${c.actChange}幕へ移り、台本が書き換わる。これは新しい幕のコマで、台本送りでは届かない（送ると今の幕の次のコマになる）</span>`);
     if (c.role === 'next' && !c.cond && !c.unknown) lines.push('<span style="color:#b9ad95">このまま発動すれば、次のターンはこれになる</span>');
     const e = run.enemy;
     if (e && e.boss && e.seals > 0 && c.role !== 'now' && !c.actChange && c.it && (c.it.k === 'attack' || c.it.k === 'jam'))
@@ -225,6 +240,8 @@
       if (n.k === 'mark') I.now = { icon: 'mark', sym: n.sym, label: SD.Data.SYMBOLS[n.sym].name + 'を封じ', glow: 'rgba(197,139,255,0.7)' };
       if (n.k === 'reflect') I.now = { icon: 'reflect', label: '与ダメ半分反射', glow: 'rgba(220,220,255,0.6)' };
     }
+    const lift = run.liftOf ? run.liftOf(it) : null;
+    if (lift) { I.lift = lift; I.liftNext = it.nextLabel || '強撃'; I.hint = null; } // (the plaque shows both ways out under it)
     I.width = I.value != null ? (I.sym ? 140 : 108) : 96;
     if ((it.k === 'attack' || it.k === 'doom' || it.k === 'jam') && dmg >= run.hp + run.block) I.lethal = true;
     return I;
@@ -240,6 +257,8 @@
       const wardOk = sealed !== 'ward';
       return { syms: ['blade', 'flame'].filter((s) => s !== sealed).concat(wardOk ? ['ward'] : []), text: wardOk ? 'で殻を割り切るか、盾2つで大鐘を崩す' : 'で殻を割り切って大鐘を崩す（盾は封じられている）' };
     }
+    const lift = run && run.liftOf ? run.liftOf(it) : null;
+    if (lift) return { lbl: '断つ', syms: lift.syms, text: `の三連か絆 → ${lift.name}を断つ`, also: { lbl: '守る', syms: ['ward'], text: `2つで${it.nextLabel || '強撃'}を崩す（糸は残る）` } };
     if (n && n.k === 'mark') return { syms: [n.sym], avoid: true, text: 'は出すと自分が傷つく。ずらして外す' };
     if (n && n.k === 'reflect') return { syms: ['ward', 'heart'], text: 'で受け流す（攻撃すると半分返る）' };
     if (n && n.k === 'curl') return { syms: ['flame'], text: 'は鎧を無視する' };
@@ -288,6 +307,8 @@
       if (n.k === 'mark') lines.push(`<b>このターン</b> ${S(n.sym)} は封じられ、発動列に出ると1つにつき2ダメージ${n.next ? '（次は ' + S(n.next) + '）' : ''}`);
       if (n.k === 'reflect') lines.push('<b>このターン</b> 与えたダメージの半分が返ってくる（ブロックで受けられる）');
     }
+    const lx = UI.liftExplain(run, it);
+    if (lx) lines.push(`<span style="color:#ffe1a0">${lx}</span>`);
     if (it.guard && (it.k === 'attack' || it.k === 'charge')) lines.push(`同時に<b>殻（防御）${it.guard}</b>を得る。次の自分のターン、剣・焔の直撃を ${it.guard} まで受け止める（燃焼・棘・死神は素通り）`);
     const ED = run.enemy && SD.Data.ENEMIES[run.enemy.id];
     if (ED && ED.mirror && it.now && it.now.k === 'mark') lines.push(`<span style="color:#e2c8ff">${ED.name}：封じるのは、前のターンの発動でいちばん多く働いた記号（最初はいちばん多く彫った記号）。台本を送っても外れない</span>`);

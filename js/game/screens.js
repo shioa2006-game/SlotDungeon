@@ -352,13 +352,18 @@ const TREE_SX = 1.12;
   // RUN
   // =====================================================================================
   class RunScreen {
-    constructor(opts = {}) { this.startFloor = opts.startFloor || 1; }
+    // opts.kit { carvings, relics }: picked at the start, before the first door (the stage 4b test entrance to B17 uses it)
+    constructor(opts = {}) { this.startFloor = opts.startFloor || 1; this.kit = opts.kit || null; this.act = opts.act || 1; }
 
     enter() {
       const G = SD.Game;
       this.profile = G.profile;
       this.mods = SD.Meta.computeMods(this.profile);
       this.run = new SD.Run(this.mods, { startFloor: this.startFloor });
+      if (this.kit) {
+        for (let i = 0; i < (this.kit.carvings || 0); i++) this.run.pending.push('carving');
+        for (let i = 0; i < (this.kit.relics || 0); i++) this.run.pending.push('relic');
+      }
       this.scene = new SD.Scene();
       this.reels = new SD.ReelView();
       this.reels.sync(this.run);
@@ -391,12 +396,62 @@ const TREE_SX = 1.12;
         SD.Game.save();
         setTimeout(() => { SD.FX.banner(fresh.map((n) => n.name).join('・'), { sub: '新たな灯紋が灯っている', size: 50, y: 170, life: 2.0 }); if (SD.Audio) SD.Audio.play('relic'); }, 2100);
       }
-      this.play(this.run.begin());
+      let ev = this.run.begin();
+      if (this.kit && this.kit.auto) ev = this.autoKit(ev);
+      this.play(ev);
+    }
+
+    // (test entrance) pick the kit without the crossroads screens, as the sim's bot would; returns the events that enter the fight
+    autoKit(ev) {
+      const run = this.run;
+      const score = (o) => {
+        switch (o.kind) {
+          case 'relic': return 5;
+          case 'add2': return 4.5;
+          case 'gild': return 4;
+          case 'add': return { blade: 3, flame: 2.6, ward: 2, heart: 2, lantern: 0.5, wild: 6, skull: run.mods.skullPact ? 2 : -5 }[o.sym] || 0;
+          case 'transmute': return o.from === 'lantern' || o.from === 'skull' ? 3 : 0.5;
+          case 'remove': return o.sym === 'skull' ? 5 : o.sym === 'lantern' ? 1.5 : 0.2;
+          case 'spark': return 3;
+          default: return -1; // (鑿 and the rest)
+        }
+      };
+      let out = ev;
+      for (let guard = 0; guard < 80 && run.phase !== 'idle' && run.phase !== 'dead'; guard++) {
+        if (run.phase === 'chisel') out = run.finishChisel();
+        else if (run.phase === 'crossroads') {
+          let bi = null, bs = -1e9;
+          (run.offers || []).forEach((o, i) => { const s = score(o); if (s > bs) { bs = s; bi = i; } });
+          out = run.choose(bi, 0);
+        } else if (run.phase === 'event') out = run.chooseEvent(run.event.options[0].id);
+        else break;
+      }
+      this.updateRelics();
+      this.V.hp = this.V.hpShown = this.V.hpGhost = run.hp; this.V.maxHp = run.maxHp; this.V.sparks = run.sparks;
+      return out;
+    }
+    // (test entrance) start the final boss at 面の段 / 祈りの段 / 終幕の段 (its HP at that string), the act's first cell
+    startAtAct(ev, act) {
+      const run = this.run, e = run.enemy;
+      if (!e || !SD.UI.isFinal(run)) return;
+      const ED = SD.Data.ENEMIES[e.id];
+      e.hp = ED.marks[act - 2];
+      e.phase = act; e.phaseFor = act; e.phaseAt = e.cursor || 0;
+      e.intent = run._readCell(e); e.now = e.intent.now || null;
+      // as you would arrive there (measured, docs/EXPANSION_4B_PROMISE.md): hurt (面 75% HP, 祈り 55%, 終幕 50%), the sparks
+      // full from the snapped string, and from 祈りの段 on the fight's free respin / nudge / 割れた鏡 already used
+      run.hp = Math.max(1, Math.round(run.maxHp * (act === 2 ? 0.75 : act === 3 ? 0.55 : 0.5))); run.sparks = run.maxSparks;
+      if (act >= 3 && run.fight) { run.fight.freeRespinUsed = true; run.fight.mirrorFree = 0; run.fight.freeNudgeLeft = 0; }
+      this.V.hp = this.V.hpShown = this.V.hpGhost = run.hp; this.V.sparks = run.sparks;
+      const c = ev.find((x) => x.t === 'combat');
+      if (c) { c.enemy = run._enemySnap(); c.intent = e.intent; c.hp = run.hp; c.maxHp = run.maxHp; c.sparks = run.sparks; }
     }
 
     exit() { SD.UI.hideTip(); this.closePicker(); }
 
     play(events) {
+      // (test entrance) start the final boss at a later act as soon as its fight begins
+      if (this.act > 1 && !this._actDone && events.some((x) => x.t === 'combat')) { this._actDone = true; this.startAtAct(events, this.act); }
       this.state = 'anim';
       this.refreshButtons();
       return this.director.play(events).then(() => {
@@ -461,7 +516,7 @@ const TREE_SX = 1.12;
       const Z = SD.Data.ZONES[SD.Data.FLOORS[f] ? SD.Data.FLOORS[f].zone : 'abyss'];
       this.dom.floor.innerHTML = `<span class="b">B${f}</span><span class="z">${Z.name}</span>`;
       let html = '';
-      const lastBead = run.deep || run.floor > SD.Data.LAST_FLOOR ? SD.Data.DEEP_LAST_FLOOR : SD.Data.LAST_FLOOR;
+      const lastBead = Math.max(run.floor, run.startFloor) >= SD.Data.FINAL_FLOOR ? SD.Data.FINAL_FLOOR : run.deep || run.floor > SD.Data.LAST_FLOOR ? SD.Data.DEEP_LAST_FLOOR : SD.Data.LAST_FLOOR;
       for (let k = 1; k <= lastBead; k++) {
         const fl = SD.Data.FLOORS[k];
         const cls = ['bead', fl.type];
@@ -537,11 +592,13 @@ const TREE_SX = 1.12;
         boss: snap.boss, elite: snap.elite, dread: snap.dread, phase: snap.phase, armor: snap.armor, armorNow: snap.armor,
         hpShown: keep && prev ? prev.hpShown : snap.hp, hpGhost: keep && prev ? prev.hpGhost : snap.hp,
       };
+      if (snap.final) Object.assign(ev, { final: true, strings: (SD.Data.ENEMIES[snap.id] || {}).strings || null, acts: (SD.Data.ENEMIES[snap.id] || {}).acts || null });
       return ev;
     }
 
     setIntent(it, opts) {
       if (this._tipOn) { SD.UI.hideTip(); this._tipOn = false; }
+      if (!(opts && opts.debt)) this.liftFree = false; // (a new cell: whoever it lifts hangs again)
       this.intent = it ? SD.UI.intentInfo(this.run, it, this.run.enemy, { band: SD.UI.bandVisible(this.run) }) : null;
       if (this.intent) { this.intent.born = this.scene.time; if (opts && opts.debt) this.intent.debt = true; }
       if (!(opts && opts.debt)) this.refreshBand();
@@ -580,7 +637,7 @@ const TREE_SX = 1.12;
         const P = run.previewAdvance();
         if (!P) return;
         const I = SD.UI.intentInfo(run, P.intent, run.enemy, { band: true });
-        this.hoverPrev = { R: P.R, turn: P.band && P.band.outcome, band: P.band, caption: '送ると…', intentI: I, unknown: P.unknown };
+        this.hoverPrev = { R: P.R, turn: P.band && P.band.outcome, band: P.band, caption: '送ると…', intentI: I, unknown: P.unknown, intent: P.unknown ? null : P.intent };
         this.renderLeft(P.R || run.forecast(), P.unknown ? '送ると…（何が来るかはサイコロ次第）' : '送ると…', P.R ? this.hoverPrev.turn : null);
       } else {
         const P = run.previewBorrow();
@@ -808,6 +865,7 @@ const TREE_SX = 1.12;
     // ------------------------------------------------------------------ left panel (forecast)
     renderLeft(R, label, T) {
       const U = UI(), run = this.run, el = this.dom.left;
+      el.classList.toggle('final', SD.UI.isFinal(run)); // (B17: the panel never grows over the stage)
       if (T === undefined) T = this.hoverPrev ? this.hoverPrev.turn : this.turnPrev;
       el.innerHTML = '';
       const e = run.enemy;
@@ -821,11 +879,12 @@ const TREE_SX = 1.12;
             const I = SD.UI.intentInfo(run, it, e);
             el.appendChild(U.el('div', 'tip2', `次の行動: <b>${I.label}</b>${I.value != null ? ' ' + I.value : ''}`));
             const w = SD.UI.wantedHint(run, it);
-            if (w) {
-              const row = U.el('div', 'wanted' + (w.avoid ? ' avoid' : ''));
-              row.appendChild(U.el('span', 'w-lbl', w.avoid ? '避ける目' : '狙い目'));
-              for (const sym of w.syms) row.appendChild(U.sym(sym, 24));
-              row.appendChild(U.el('span', 'w-txt', w.text));
+            // (四本の糸: a lift has two rows, 断つ and 守る)
+            for (const x of w ? [w].concat(w.also ? [w.also] : []) : []) {
+              const row = U.el('div', 'wanted' + (x.avoid ? ' avoid' : '') + (x === w.also ? ' guard' : ''));
+              row.appendChild(U.el('span', 'w-lbl', x.lbl || (x.avoid ? '避ける目' : '狙い目')));
+              for (const sym of x.syms) row.appendChild(U.sym(sym, 24));
+              row.appendChild(U.el('span', 'w-txt', x.text));
               el.appendChild(row);
             }
           }
@@ -866,20 +925,45 @@ const TREE_SX = 1.12;
         el.appendChild(U.el('div', 'fc-combo', R.combos.map((c) => names[c.k] + (c.s ? '・' + SD.Data.SYMBOLS[c.s].name : '')).join(' ＋ ')));
       }
       if (R.multNotes.length) el.appendChild(U.el('div', 'fc-mult', R.multNotes.join(' ')));
+      // 四本の糸: this line snaps the lifted hero's string — or what would
+      if (e && SD.UI.isFinal(run) && run.liftOf) {
+        const lift = run.liftOf((label && this.hoverPrev && this.hoverPrev.intent) || e.intent);
+        if (R.cut) {
+          const c = R.combos.find((x) => x.k === 'bond') || R.combos.find((x) => (x.k === 'trine' || x.k === 'quad') && R.cut.syms.indexOf(x.s) >= 0);
+          const cn = c && c.k === 'bond' ? '絆の陣' : c ? `${SD.Data.SYMBOLS[c.s].name}の${c.k === 'quad' ? '四連' : '三連'}` : '';
+          el.appendChild(U.el('div', 'fc-in fc-thread', `<b class="three">${cn} → ${R.cut.name}を断つ</b>（あと${Math.max(0, e.hp - R.cutMark)}を一気に）`));
+        } else if (lift) {
+          const who = lift.syms.map((s) => SD.Data.SYMBOLS[s].name).join('か');
+          const it0 = (label && this.hoverPrev && this.hoverPrev.intent) || e.intent, nx = (it0 && it0.nextLabel) || '強撃';
+          el.appendChild(U.el('div', 'fc-in fc-thread', `${who}の三連か絆 → ${lift.name}を断てる`));
+          // the other way out of a lift: two wards break the 溜め — and the string stays
+          el.appendChild(U.el('div', 'fc-in', R.staggerWard ? `<b class="safe">盾${R.groups.ward.n}つ → ${nx}は消える</b>（糸は切れない）` : `盾2つ → ${nx}を崩せる（糸は切れない）`));
+        }
+      }
       // outcome
       if (e) {
         // the enemy's HP right after this 発動: exact from the turn preview when it is knowable (a 連鎖 spin is not),
         // else from the forecast (QA-003: the turn preview also knows the shell vs 死神 / 起爆, which go round it)
         const exact = T && !T.random && T.strikeHp != null;
         const after = exact ? T.strikeHp : Math.max(0, e.hp - Math.max(0, R.totalDmg - (e.block || 0)));
+        const ED = SD.Data.ENEMIES[e.id], fin = !!(ED && ED.strings && ED.marks);
+        // 四本の糸: does a string snap this turn (the act changes: the blow it was winding up never comes)?
+        const mark = fin ? run.nextMark(e) : 0;
+        const snaps = fin && (!!R.cut || after <= mark || !!(T && !T.random && T.phaseAfter != null && T.phaseAfter !== T.phaseBefore));
         const out = U.el('div', 'fc-out');
-        out.innerHTML = after <= 0 ? '<b class="kill">撃破できる！</b>' : `敵HP <b>${e.hp}</b> → <b>${after}</b> <small class="when">発動後</small>`;
+        out.innerHTML = after <= 0 ? (fin ? '<b class="kill">最後の糸が切れる → 勝ち</b>' : '<b class="kill">撃破できる！</b>') : `敵HP <b>${e.hp}</b> → <b>${after}</b> <small class="when">発動後</small>`;
         if (R.sealBreaks) out.innerHTML += ` <span class="seal">封印-${R.sealBreaks}</span>`;
         if (e.block > 0 && R.directDmg > 0 && after > 0) out.innerHTML += ` <span class="seal">殻${e.block}が先に受ける</span>`;
         U.bindTip(out, '<b>敵HPの予測</b><br><b>発動後</b>：このターンの剣・焔・髑髏・死神・起爆を受けた直後のHP。<br>そのあと敵の番に、<b>燃焼 → 敵の行動</b>（攻撃・回復・殻）の順で進む。変わるときは下の行に出る。');
-        el.appendChild(out);
+        if (!fin || after <= 0) el.appendChild(out);
+        // 四本の糸: the string this hit leaves (or snaps); a lift cut already said so above
+        if (fin && after > 0 && !R.cut) {
+          const S = ED.strings[Math.min(ED.strings.length - 1, (e.phase || 1) - 1)];
+          if (after <= mark) el.appendChild(U.el('div', 'fc-in fc-thread', `<b class="three">${S.name}が切れる</b>（次の糸へ）`));
+          else el.appendChild(U.el('div', 'fc-in fc-thread', `${S.name} あと ${e.hp - mark} → <b>${after - mark}</b>`));
+        }
         // what the enemy's own turn then does to that number (only when it changes it)
-        if (exact && after > 0) {
+        if (exact && after > 0 && !(fin && !T.diesBy)) {
           const why = [];
           if (T.burnTick) why.push(`燃焼 −${T.burnTick}`);
           if (T.healed) why.push(`回復 +${T.healed}`);
@@ -897,10 +981,11 @@ const TREE_SX = 1.12;
           const sym = nx && !nx.cond && !nx.unknown && nx.it.now && nx.it.now.sym;
           el.appendChild(U.el('div', 'fc-in', sym ? `次の封じ：<b>${SD.Data.SYMBOLS[sym].name}</b>（この列で発動した場合）` : '次の封じ：？（連鎖しだいで変わる）'));
         }
-        const it = e.intent;
-        // a trine that waits: say why, once the player can plan around it
-        const why = this.state === 'decision' && !label ? run.comboPauseReason() : null;
-        if (this.state === 'decision' && !label && run.canAdvance()) {
+        const it = (fin && label && this.hoverPrev && this.hoverPrev.intent) || e.intent;
+        // a trine that waits: say why, once the player can plan around it (the final boss: the send line says it already)
+        let why = this.state === 'decision' && !label ? run.comboPauseReason() : null;
+        if (fin && why === 'script') why = null;
+        if (this.state === 'decision' && !label && run.canAdvance() && !snaps) {
           // the exact cell a send makes "now" (it can differ from the band's 次 when this resolve changes the boss's act)
           const PA = run.previewAdvance();
           if (PA) {
@@ -930,7 +1015,7 @@ const TREE_SX = 1.12;
             const lethal = T.partyDies || T.secondWind;
             const back = sum(main, 'back') + sum(debt, 'back');
             el.appendChild(U.el('div', 'fc-in', `予告 ${sum(main, 'raw')}${debt.length ? ` <b class="debt">＋借り ${sum(debt, 'raw')}</b>` : ''} − 盾 ${sum(main, 'blocked') + sum(debt, 'blocked')} → <b class="${lethal ? 'hurt lethal' : dmg ? 'hurt' : 'safe'}">${lethal ? '致命' : '被ダメ ' + dmg}</b>${back ? ` <b class="back">返す ${back}</b>` : ''}`));
-          } else if (it && it.k === 'charge') {
+          } else if (it && it.k === 'charge' && !snaps && !(fin && run.liftOf(it))) {
             if (SD.UI.breaksStance(run)) { if (R.staggerWard) el.appendChild(U.el('div', 'fc-in', `<b class="safe">盾2つで構えが崩れる（${it.nextLabel || '強撃'}は台本から消える）</b>`)); }
             else el.appendChild(U.el('div', 'fc-in', R.stagger ? '<b class="safe">強撃を阻止できる（台本から消える）</b>' : '次は強撃。盾2つで怯ませられる'));
           } else if (T.partyDies) el.appendChild(U.el('div', 'fc-in', '<b class="hurt lethal">致命</b>'));
@@ -945,7 +1030,7 @@ const TREE_SX = 1.12;
             const taken = (R.guardian ? 0 : Math.max(0, inc - blk)) + refl;
             if (R.reflectIn) el.appendChild(U.el('div', 'fc-in', `反射 ${R.reflectIn}${ra ? '（盾で ' + ra + '）' : ''}`));
             el.appendChild(U.el('div', 'fc-in', `予告 ${inc} − 盾 ${blk} → <b class="${taken ? 'hurt' : 'safe'}">被ダメ ${taken}</b>`));
-          } else if (it.k === 'charge') {
+          } else if (it.k === 'charge' && !snaps && !(fin && run.liftOf(it))) {
             if (SD.UI.breaksStance(run)) { if (R.staggerWard) el.appendChild(U.el('div', 'fc-in', `<b class="safe">盾2つで構えが崩れる（${it.nextLabel || '強撃'}を阻止できる）</b>`)); }
             else el.appendChild(U.el('div', 'fc-in', R.stagger ? '<b class="safe">強撃を阻止できる</b>' : '次は強撃。盾2つで怯ませられる'));
           }
@@ -1406,6 +1491,11 @@ const TREE_SX = 1.12;
           kb.innerHTML = `<div class="k-name">${k.name}</div><div class="k-bar"><div class="k-fill" style="width:${Math.round(k.hpPct * 100)}%"></div></div><div class="k-left">残り <b>${k.hp}</b> / ${k.maxHp}</div>`;
           box.appendChild(kb);
         }
+      } else if (summary.won && summary.floor === SD.Data.FINAL_FLOOR) {
+        // 深淵の繰り手 (stage 4b stand-in: the 真のクリア record, 終の巻 and the ending come in stage 4d)
+        box.appendChild(U.el('div', 'end-title win', '深淵の繰り手を討った'));
+        box.appendChild(U.el('div', 'end-sub', '糸は断たれた。運命は、三人の手に。'));
+        box.appendChild(U.el('div', 'win-note deep', '（段階4bの仮の画面。真のクリアの記録と終の巻は段階4dで作る）'));
       } else if (summary.won) {
         box.appendChild(U.el('div', 'end-title win', '灰輪の主を討った'));
         box.appendChild(U.el('div', 'end-sub', '灯輪は再び正しく廻り始めた。けれど深淵の灯は、まだ呼んでいる。'));
@@ -1483,6 +1573,21 @@ const TREE_SX = 1.12;
       // The buttons, the same shape after every fall: [灯して再挑戦 (when the whispered node can be lit)] [灯紋の輪へ]
       // [すぐ再挑戦 (small: the same start, nothing lit)]. A 灰の底 result without that offer leads with 灰の底から再挑戦
       // (a brand-new run: nothing carried over, the B13 kit chosen again).
+      if (G.testMode) {
+        const tb = U.el('div', 'end-btns');
+        const go = (act) => () => { location.search = `?test=b17${act > 1 ? '&act=' + act : ''}${G.testOpts && G.testOpts.pick ? '&pick=1' : ''}`; };
+        const again = U.button('もう一度（同じ条件） <kbd>Space</kbd>', 'primary big', () => location.reload(), { silent: true });
+        tb.appendChild(again);
+        tb.appendChild(U.button('最初から', 'mini', go(1)));
+        tb.appendChild(U.button('面の段から', 'mini', go(2)));
+        tb.appendChild(U.button('祈りの段から', 'mini', go(3)));
+        tb.appendChild(U.button('終幕の段から', 'mini', go(4)));
+        box.appendChild(tb);
+        m.appendChild(box);
+        this.endPrimary = again;
+        this.endInputLock = performance.now() + 1000;
+        return;
+      }
       const btns = U.el('div', 'end-btns');
       const deepRetry = !!summary.deep && SD.Meta.computeMods(p).shortcuts.indexOf(13) >= 0;
       let lead = null;
@@ -1552,7 +1657,27 @@ const TREE_SX = 1.12;
         leverActive: this.state === 'idle' || this.state === 'decision',
         runes: Math.min(12, Object.keys(this.profile.unlocked).length - 1),
         boss: run.enemy && run.enemy.boss,
+        ...this.liftState(dec),
       };
+    }
+    // 四本の糸: the heroes the current cell lifts (until their string snaps this turn), the nudges that would make the combo
+    // that snaps it, and whether this line does
+    liftState(dec) {
+      const run = this.run, e = run.enemy;
+      const lift = e && e.hp > 0 && this.intent ? this.intent.lift : null;
+      if (!lift) return { lift: [] };
+      const out = { lift: this.liftFree ? [] : lift.hero === 'all' ? ['priest', 'witch', 'knight'] : [lift.hero] };
+      if (run.phase !== 'spun' || this.reels.busy() || this.liftFree) return out;
+      out.cutNow = !!run.forecast().cut;
+      if (!out.cutNow) {
+        out.cutMiss = [];
+        for (let i = 0; i < run.reels.length; i++) for (const dir of [-1, 1]) {
+          if (dec ? !run.canNudge(i, dir) : (run.reels[i].jam || run.reels[i].held)) continue;
+          const cells = run.paylineCells(); cells[i] = run.cellAt(i, dir);
+          if (run.evaluate(cells).cut) out.cutMiss.push({ reel: i, dir });
+        }
+      }
+      return out;
     }
 
     // how many sparks the hovered action would burn (the candles flicker)
@@ -1572,7 +1697,7 @@ const TREE_SX = 1.12;
       if (!e || !e.intent || !(this.state === 'idle' || this.state === 'decision' || this.state === 'auto')) return 0;
       const T = this.hoverPrev ? this.hoverPrev.turn : this.turnPrev;
       if (run.phase === 'spun' && T && !T.random) return T.partyDies || T.secondWind ? Math.max(T.damage, run.hp) : T.damage;
-      const it = e.intent;
+      const it = (SD.UI.isFinal(run) && this.hoverPrev && this.hoverPrev.intent) || e.intent;
       if (!(it.k === 'attack' || it.k === 'doom' || it.k === 'jam')) return 0;
       const R = this.hoverPreview || this.fc;
       let blk = run.block + (R ? R.block : 0);
@@ -1774,7 +1899,7 @@ const TREE_SX = 1.12;
       const [sx, sy] = SD.FX.shakeOffset();
       ctx.save();
       ctx.translate(sx, sy);
-      this.scene.drawStage(ctx, {});
+      this.scene.drawStage(ctx, { lift: st.lift });
       if (this.joy > 0) {
         // the whole stage glows warm for a moment when fate lines up
         ctx.save(); ctx.beginPath(); ctx.rect(0, 0, 1280, 446); ctx.clip();

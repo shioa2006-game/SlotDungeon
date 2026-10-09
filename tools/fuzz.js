@@ -7,7 +7,10 @@
  *   - a borrowed spark never survives the turn, is taken at most once per fight, and its debt is paid exactly once
  *   - a locked cell (強撃 / 灰燼) is never sent away, and the script is sent at most once per turn
  *   - borrow state never crosses a fight; a turn in which the script was sent never auto-resolves
- *   - a 0-spark turn never auto-resolves while a borrowed spark could have saved the party (AE audit 2026-10-08) */
+ *   - a 0-spark turn never auto-resolves while a borrowed spark could have saved the party (AE audit 2026-10-08)
+ *   - 灰鐘の番人 (B16): its 構え breaks (wards / hits through the shell) exactly as the preview and forecast said
+ *   - QA audit 1: the enemy HP right after the 発動 / after its turn equals the preview; the "この操作で発動" preview equals
+ *     what the nudge did, and the rule behind it equals the old after-manipulation flow */
 'use strict';
 const path = require('path');
 globalThis.SD = {};
@@ -134,11 +137,20 @@ for (let n = 0; n < N; n++) {
           }
           count('zero-auto');
         }
+        // QA-004: the rule that fires the turn after a manipulation is the UI flow it replaced
+        if (R.chance(0.3)) {
+          const Rf = run.forecast(), great = Rf.combos.some((c) => c.k === 'trine' || c.k === 'bond' || c.k === 'quad');
+          const old = (great || !run.needsDecision()) && !run.awaken.ready && run.shouldAutoResolve();
+          if (run.firesAfterManip() !== old) fail('firesAfterManip != the old after-manipulation flow', run);
+          count('fires-rule');
+        }
         // forecast consistency: the preview must predict the payline that resolve() uses
         const before = run.forecast();
+        const firesPrev = (act) => { const P = run.previewAfter(act); return P ? P.fires : null; };
+        const firesCheck = (want) => { if (want != null && run.phase === 'spun') { if (run.firesAfterManip() !== want) fail('"この操作で発動" preview != what the manipulation did', run); count('fires-preview'); } };
         const k = R.int(13);
         if (k === 0 && run.canRespin()) { for (let i = 0; i < 3; i++) if (R.chance(0.4)) run.toggleHold(i); ev = run.respin(); actions.respin = (actions.respin || 0) + 1; }
-        else if (k === 1 && run.canNudgeAny()) { const i = R.int(3), d = R.chance(0.5) ? 1 : -1; ev = run.nudge(i, d); actions.nudge = (actions.nudge || 0) + 1; }
+        else if (k === 1 && run.canNudgeAny()) { const i = R.int(3), d = R.chance(0.5) ? 1 : -1; const want = run.canNudge(i, d) ? firesPrev((c) => c.nudge(i, d)) : null; ev = run.nudge(i, d); actions.nudge = (actions.nudge || 0) + 1; if (ev.length) firesCheck(want); }
         else if (k === 2 && run.canBlessAny()) { for (let i = 0; i < 3; i++) if (run.canBless(i)) { ev = run.bless(i); break; } actions.bless = (actions.bless || 0) + 1; }
         else if (k === 3 && run.canEchoAny()) { for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) if (run.phase === 'spun' && run.canEcho(a, b) && R.chance(0.5)) { ev = run.echo(a, b); actions.echo = (actions.echo || 0) + 1; } }
         else if (k === 4 && run.canFateKey()) { const i = R.int(3); if (run.canFateKey(i)) { ev = run.fateKey(i, R.int(run.reels[i].strip.length)); actions.key = (actions.key || 0) + 1; } }
@@ -176,8 +188,9 @@ for (let n = 0; n < N; n++) {
           const debtCell = B && B.cells.find((c) => c.role === 'debt');
           const skipCell = B && B.cells.find((c) => c.role === 'skip');
           const P = run.previewTurn();
+          const hpStart = run.enemy ? run.enemy.hp : null;
           const hadDebt = !!(run.fight && run.fight.debt);
-          const e = run.enemy, fightBefore = run.fight;
+          const e = run.enemy, fightBefore = run.fight, intent0 = run.enemy && run.enemy.intent;
           const hpBefore = run.hp, block0 = run.block;
           const e0 = run.enemy ? { hp: run.enemy.hp, block: run.enemy.block, seals: run.enemy.seals } : null;
           ev = run.resolve();
@@ -201,6 +214,18 @@ for (let n = 0; n < N; n++) {
           // a new fight never starts with borrow state from the last one
           if (ev.some((x) => x.t === 'combat') && run.fight && (run.fight.debt || run.fight.borrowed || run.fight.borrowUsed)) fail('borrow state leaked into the next fight', run);
           if (fightBefore && fightBefore.borrowed) fail('borrowed spark survived resolve', run);
+          // QA-003: the enemy HP right after the 発動 and after its turn, as previewed
+          if (P && !P.random && hpStart != null) {
+            let hp = hpStart, turn = false;
+            for (const x of ev) {
+              if (x.t === 'enemyTurn') { turn = true; break; }
+              if (x.hp != null && ((x.t === 'act' && (x.sym === 'blade' || x.sym === 'flame' || x.sym === 'skull')) || x.t === 'reaper' || x.t === 'pyre')) hp = x.hp;
+            }
+            const strike = ev.some((x) => x.t === 'enemyDie') && !turn ? 0 : hp;
+            if (P.strikeHp !== strike) fail(`enemy HP after the 発動: preview ${P.strikeHp} actual ${strike}`, run);
+            if (P.enemyAfter && run.enemy === e && run.phase === 'idle' && P.enemyAfter.hp !== e.hp) fail(`enemy HP after its turn: preview ${P.enemyAfter.hp} actual ${e.hp}`, run);
+            count('enemy-hp');
+          }
           // damage prediction (the HP bar's striped forecast)
           if (P && !P.random) {
             let took = 0;
@@ -224,6 +249,13 @@ for (let n = 0; n < N; n++) {
             const sk = ev.find((x) => x.t === 'staggerCancel');
             if (!sk) fail('band showed a struck-out heavy but no stagger happened', run);
             count('band-skip');
+          }
+          // 灰鐘の番人: the 構え breaks exactly as previewed, both ways (two wards, or hits through the shell)
+          if (e && intent0 && intent0.k === 'charge' && SD.Data.ENEMIES[e.id].breakStagger && P && !P.random) {
+            const sk = ev.some((x) => x.t === 'staggerCancel'), br = ev.some((x) => x.t === 'stagger' && x.by === 'break');
+            if (!!P.skipped !== sk) fail('灰鐘の番人: 大鐘 struck in the preview ' + !!P.skipped + ', actual ' + sk, run);
+            if (!ev.some((x) => x.t === 'enemyDie') && br !== (before.staggerBreak && !before.staggerWard)) fail('灰鐘の番人: break forecast != actual', run);
+            count(sk ? (br ? 'bell-break' : 'bell-wards') : 'bell-held');
           }
           // the idle (before-spin) reading of the band, when nothing on the payline touched the script this turn
           if (idleBand && sameFight && idleBand.next && !idleBand.next.unknown && !idleBand.next.cond &&

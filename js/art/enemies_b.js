@@ -619,14 +619,7 @@
     rune: { line: '#c9a8ff', glow: 'rgba(150,100,255,0.55)' },
     book: '#5a1f2c', bookSh: '#3a1119', page: '#efe2c4', pageSh: '#cbb995',
   };
-  // 深淵の修道院長 (variant 'deep', 灰の底): ash-grey vestments, ember fire
-  const AB_DEEP = Object.assign({}, AB_NORMAL, {
-    robe: '#3a3436', robeSh: '#221e20', robeIn: '#0e0b0c', mantle: '#4a4244', mantleSh: '#2c2628',
-    mitre: '#5a2a2a', mitreSh: '#3a1818', gold: '#b08a5a', goldSh: '#7a5a32',
-    eye: RED_EYE, fire: { outer: '#ff6a3a', inner: '#ffe0c0', glowColor: 'rgba(255,90,50,0.6)' },
-    rune: { line: '#ff9a7a', glow: 'rgba(255,90,50,0.5)' },
-  });
-  let AB = AB_NORMAL;
+  const AB = AB_NORMAL;
 
   function abbotCenser(ctx, s, x, y, swing, fireK) {
     const t = s.t;
@@ -876,7 +869,6 @@
     info: { height: 215, width: 128, fx: [-46, -126], head: [-8, -232] },
     draw(ctx, pose, opts) {
       const s = st(pose, opts);
-      AB = opts && opts.variant === 'deep' ? AB_DEEP : AB_NORMAL;
       const alpha = s.pose === 'die' ? 1 - 0.97 * ease(seg(s.p, 0.3, 1)) : 1;
       fadeLayer(ctx, alpha, (c) => abbotBody(c, s));
     },

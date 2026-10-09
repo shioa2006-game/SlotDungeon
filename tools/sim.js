@@ -13,6 +13,9 @@
  *                                              b9 = 第三層から; mix = B9 and 灰の底から B13 in turn). [G] compares the starts.
  *   node tools/sim.js entry [n]                16 builds (4 strategies x 4 carving tastes), starts rotated B5 / B9 / B13 after the clear:
  *                                              boss wins by start and 灰の底 clears (B9 descent vs B13 direct), embers per minute
+ *   node tools/sim.js b16 [n]                  灰鐘の番人 (B16) per strategy and growth stage: win rate, fight length, how each 大鐘 was
+ *                                              answered (hits through the shell / two wards / it landed), and what the turns looked like
+ *                                              (actions per turn, decision turns, which symbol led the line, how often the same lead repeats)
  * Bots play through the real engine (js/core). NOSCRIPT=1 keeps the bots from using 拍子木 / 借り火 even when lit. */
 'use strict';
 const path = require('path');
@@ -178,6 +181,7 @@ function doAct(run, act) {
 
 function playTurn(run, smart) {
   run.spin();
+  if (LOG.hook && LOG.hook.spun) LOG.hook.spun(run);
   // baseline mode: would the game stop for the player on this spin? (pure previews: the run and its RNG are untouched)
   const M = LOG.measure && run.phase === 'spun' ? LOG.turn : null;
   if (M && !run.shouldAutoResolve()) M.dec++;
@@ -186,11 +190,15 @@ function playTurn(run, smart) {
     const act = bestAction(run, smart);
     if (!act) break;
     doAct(run, act);
+    if (LOG.hook) LOG.hook.act(run, act);
     if (M && step === 0) M.acted++;
   }
   // first turn of the fight: the damage the chosen line deals, vs the enemy's max HP (headroom for new enemies)
   if (M && run.phase === 'spun' && M.t++ === 0) M.dmg1 = run.forecast().totalDmg;
-  if (run.phase === 'spun') run.resolve();
+  if (run.phase === 'spun') {
+    if (LOG.hook) { const e0 = run.enemy, it0 = e0 && e0.intent, R = run.forecast(); LOG.hook.resolve(run, run.resolve(), e0, it0, R); } // (forecast is pure)
+    else run.resolve();
+  }
 }
 
 // ------------------------------------------------------------------ between-room policy
@@ -588,7 +596,7 @@ if (mode === 'baseline') {
   }
   for (const [st, name] of [['post', 'after the clear'], ['full', 'whole tree lit']]) {
     console.log(`  -- fights in 灰の底, ${name}`);
-    for (const id of ['husk', 'mirror', 'abbot_deep']) row(`${SD.Data.ENEMIES[id].name}`, MF.filter((x) => x.stage === st && x.enemy === id && x.floor >= 13));
+    for (const id of ['husk', 'mirror', SD.Data.FLOORS[SD.Data.DEEP_LAST_FLOOR].enemy]) row(`${SD.Data.ENEMIES[id].name}`, MF.filter((x) => x.stage === st && x.enemy === id && x.floor >= 13));
   }
   if (LOG.entry && LOG.entry !== 'b5') {
     console.log(`\n[G] starts after the clear (ENTRY=${LOG.entry})`);
@@ -644,7 +652,7 @@ if (mode === 'deep') {
   const E = SD.Data.ENEMIES;
   E.husk_ctl = Object.assign({}, E.husk, { name: '重ね殻（殻なしの対照）', startBlock: 0, ai: (e) => Object.assign({}, E.husk.ai(e), { guard: 0 }) });
   E.mirror_ctl = Object.assign({}, E.mirror, { name: '返し鏡（封じなしの対照）', mirror: false, ai: (e, r) => Object.assign({}, E.mirror.ai(e, r), { now: null }) });
-  const foes = [['husk', 13], ['husk_ctl', 13], ['mirror', 14], ['mirror_ctl', 14], ['abbot_deep', 16]];
+  const foes = [['husk', 13], ['husk_ctl', 13], ['mirror', 14], ['mirror_ctl', 14], [SD.Data.FLOORS[SD.Data.DEEP_LAST_FLOOR].enemy, 16]];
   const by = {};
   for (const [foe, floor] of foes) {
     console.log(`\n${SD.Data.ENEMIES[foe].name} (${foe}, B${floor})`);
@@ -677,6 +685,88 @@ if (mode === 'deep') {
   for (const [foe, ctl] of [['husk', 'husk_ctl'], ['mirror', 'mirror_ctl']]) {
     console.log(`  ${E[foe].name}:`);
     for (const k of kits) { const a = by[foe + '|' + k], b = by[ctl + '|' + k]; console.log(`    ${k.padEnd(10)} +${(a.mean - b.mean).toFixed(1)} turns  ×${(a.mean / b.mean).toFixed(2)}  win ${Math.round((a.win - b.win) * 100)}%`); }
+  }
+}
+if (mode === 'b16') {
+  // 灰鐘の番人: per strategy (campaigns, starts as ENTRY, default mix) and stage — the B16 fights, the 大鐘 answers, the turns
+  const n = +a1 || 40;
+  const ID = SD.Data.FLOORS[SD.Data.DEEP_LAST_FLOOR].enemy;
+  LOG.measure = true; LOG.entry = process.env.ENTRY || 'mix';
+  const DMG = { blade: 1, flame: 1, skull: 1 };
+  LOG.hook = {
+    act(run, act) { const T = LOG.turn; if (T && run.enemy && run.enemy.id === ID) { T.acts = T.acts || {}; T.acts[act.k] = (T.acts[act.k] || 0) + 1; } },
+    // the 構え turn as the reels first stopped: would that line have broken the stance already?
+    spun(run) { const T = LOG.turn; if (T && run.enemy && run.enemy.id === ID && run.phase === 'spun') { const F = run.forecast(); T.spunBreak = !!F.staggerBreak; T.spunWard = !!F.staggerWard; } },
+    resolve(run, ev, e0, it0, R) {
+      const T = LOG.turn;
+      if (!T || !e0 || e0.id !== ID || run.floor !== SD.Data.DEEP_LAST_FLOOR) return;
+      T.bk = T.bk || { turns: 0, stance: 0, broke: 0, brokeMade: 0, wards: 0, wardsMade: 0, held: 0, landed: 0, wardTurns: 0, leads: [] };
+      const B = T.bk, died = ev.some((x) => x.t === 'enemyDie');
+      B.turns++;
+      if (it0 && it0.k === 'charge' && !died) {
+        B.stance++;
+        // (…Made: the line the reels first stopped on would not have done it — the bot's actions or a 連鎖 made it)
+        if (ev.some((x) => x.t === 'staggerCancel')) { if (ev.some((x) => x.t === 'stagger' && x.by === 'break')) { B.broke++; if (!T.spunBreak) B.brokeMade++; } else { B.wards++; if (!T.spunWard) B.wardsMade++; } }
+        else B.held++;
+      }
+      B.landed += ev.filter((x) => x.t === 'enemyAttack' && x.heavy).length;
+      const G = R.groups, act = Object.keys(G).filter((s) => s !== R.marked && s !== 'skull' && s !== 'wild');
+      if (G.ward && G.ward.n >= 2 && R.marked !== 'ward') B.wardTurns++;
+      let lead = null, ln = 0;
+      for (const s of ['blade', 'flame', 'ward', 'heart', 'lantern']) if (act.indexOf(s) >= 0 && G[s].n > ln) { ln = G[s].n; lead = s; }
+      B.leads.push(lead ? (DMG[lead] ? 'dmg' : lead) : 'none');
+    },
+  };
+  const all = [];
+  let seed = 1;
+  const strategies = (process.env.STRATS || 'balanced,valor,hearth,weave').split(',');
+  const gaps = {};
+  for (const strat of strategies) {
+    LOG.mfights = [];
+    const res = [];
+    for (let s = 0; s < n; s++) res.push(baselineCampaign(strat, 700 + seed++));
+    for (const f of LOG.mfights) if (f.enemy === ID && f.floor === SD.Data.DEEP_LAST_FLOOR) all.push(Object.assign({ strat }, f));
+    gaps[strat] = res.filter((r) => r.clear).map((r) => {
+      const first = r.runs.find((x) => x.stage !== 'pre' && x.deep && x.deep.cleared);
+      return { b16: first ? first.i - r.clear.runs : null, full: r.fullAt ? r.fullAt.runs - r.clear.runs : null,
+        early: r.runs.filter((x) => x.stage === 'post' && x.deep).slice(0, 2) };
+    });
+  }
+  LOG.hook = null;
+  const f0 = (x) => (Number.isFinite(x) ? x.toFixed(0) : '-'), f1 = (x) => (Number.isFinite(x) ? x.toFixed(1) : '-');
+  const pc = (a, f) => (a.length ? a.filter(f).length / a.length * 100 : NaN);
+  const sum = (a, f) => a.reduce((t, x) => t + f(x), 0);
+  console.log(`灰鐘の番人 (${ID}) — ${n} campaigns per strategy, ENTRY=${LOG.entry}`);
+  for (const st of ['post', 'full']) {
+    console.log(`\n== ${st === 'post' ? 'after the clear, tree not complete' : 'whole tree lit'}`);
+    for (const strat of strategies.concat(['ALL'])) {
+      const A = all.filter((x) => x.stage === st && (strat === 'ALL' || x.strat === strat) && x.bk);
+      if (!A.length) continue;
+      const W = A.filter((x) => x.kill), turns = A.map((x) => x.bk.turns);
+      const stance = sum(A, (x) => x.bk.stance), broke = sum(A, (x) => x.bk.broke), wards = sum(A, (x) => x.bk.wards), held = sum(A, (x) => x.bk.held);
+      const tt = sum(A, (x) => x.bk.turns), acts = sum(A, (x) => Object.values(x.acts || {}).reduce((t, v) => t + v, 0));
+      const leads = A.flatMap((x) => x.bk.leads), rep = A.reduce((t, x) => t + x.bk.leads.filter((l, i) => i > 0 && l === x.bk.leads[i - 1]).length, 0);
+      const lead = (k) => f0(pc(leads, (l) => l === k));
+      console.log(`  ${strat.padEnd(8)} fights ${String(A.length).padStart(4)}  win ${f0(pc(A, (x) => x.kill)).padStart(3)}%  turns med ${median(turns)} p90 ${pct(turns, 0.9)} >10: ${f0(pc(A, (x) => x.bk.turns > 10))}%` +
+        `  | 大鐘: 構え ${stance} → hits ${f0(broke / Math.max(1, stance) * 100)}% (made ${f0(sum(A, (x) => x.bk.brokeMade) / Math.max(1, stance) * 100)}%) / wards ${f0(wards / Math.max(1, stance) * 100)}% (made ${f0(sum(A, (x) => x.bk.wardsMade) / Math.max(1, stance) * 100)}%) / held ${f0(held / Math.max(1, stance) * 100)}%  landed/fight ${f1(sum(A, (x) => x.bk.landed) / A.length)}` +
+        `  | per turn: actions ${f1(acts / Math.max(1, tt))}  decision ${f0(sum(A, (x) => x.dec) / Math.max(1, tt) * 100)}%  lead dmg ${lead('dmg')}% ward ${lead('ward')}% heart ${lead('heart')}% lantern ${lead('lantern')}%  same lead as last turn ${f0(rep / Math.max(1, tt - A.length) * 100)}%`);
+    }
+  }
+  console.log('\n== hearth fights by length (tree not complete): what the long ones do');
+  for (const [lo, hi] of [[1, 5], [6, 10], [11, 99]]) {
+    const A = all.filter((x) => x.stage === 'post' && x.strat === 'hearth' && x.bk && x.bk.turns >= lo && x.bk.turns <= hi);
+    if (!A.length) continue;
+    const tt = sum(A, (x) => x.bk.turns), leads = A.flatMap((x) => x.bk.leads), acts = sum(A, (x) => Object.values(x.acts || {}).reduce((t, v) => t + v, 0));
+    const by = {};
+    for (const x of A) for (const k in x.acts || {}) by[k] = (by[k] || 0) + x.acts[k];
+    console.log(`  ${lo}-${hi === 99 ? '' : hi} turns: fights ${A.length}  win ${f0(pc(A, (x) => x.kill))}%  actions/turn ${f1(acts / tt)} (${Object.keys(by).map((k) => k + ' ' + f1(by[k] / tt)).join(', ')})  decision ${f0(sum(A, (x) => x.dec) / tt * 100)}%` +
+      `  lead dmg ${f0(pc(leads, (l) => l === 'dmg'))}% ward ${f0(pc(leads, (l) => l === 'ward'))}% heart ${f0(pc(leads, (l) => l === 'heart'))}%  wards>=2 ${f0(sum(A, (x) => x.bk.wardTurns) / tt * 100)}%  大鐘 held ${sum(A, (x) => x.bk.held)}/${sum(A, (x) => x.bk.stance)}`);
+  }
+  console.log('\n== progress (runs after the clear): first B16 kill vs whole tree; the first 2 runs into 灰の底');
+  for (const strat of strategies) {
+    const G = gaps[strat], E = G.flatMap((g) => g.early);
+    console.log(`  ${strat.padEnd(8)} first B16 kill: run ${median(G.filter((g) => g.b16 != null).map((g) => g.b16))} (never ${G.filter((g) => g.b16 == null).length})  whole tree: run ${median(G.filter((g) => g.full != null).map((g) => g.full))}  B16 after the tree ${f0(pc(G.filter((g) => g.full != null), (g) => g.b16 == null || g.b16 > g.full))}%` +
+      `  | first 2 runs: reached B16 ${f0(pc(E, (x) => x.deep.floor >= 16 || x.deep.cleared))}%  cleared ${f0(pc(E, (x) => x.deep.cleared))}% (n${E.length})`);
   }
 }
 function median(a) { if (!a.length) return NaN; const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; }

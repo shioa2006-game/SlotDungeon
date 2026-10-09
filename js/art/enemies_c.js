@@ -1,5 +1,6 @@
 /* EMBERWHEEL — enemies_c.js : 第四層「灰の底」 (Candlelit Paper Theater style).
- * Registers: husk 重ね殻 (stacked ash shells), mirror 返し鏡 (a floating mirror that seals what it saw).
+ * Registers: husk 重ね殻 (stacked ash shells), mirror 返し鏡 (a floating mirror that seals what it saw),
+ *            bellkeeper 灰鐘の番人 (the B16 elite: a walking bell with shells and a mirror face).
  * Contract (ARCH.md "Enemies"): draw(ctx, pose, opts) with origin = feet center, facing LEFT.
  * Poses: idle · windup · attack(p) · cast · stance · hit(p) · die(p). Unknown pose -> idle.
  */
@@ -178,6 +179,133 @@
       const s = st(pose, opts);
       fadeLayer(ctx, 1 - 0.95 * s.dieK, (c) => mirrorBody(c, s));
       motes(ctx, s.dieK, 0, -120, 140, 140, 26, '#d8e2ff', 57);
+    },
+  });
+
+  // ================================================================ BELLKEEPER 灰鐘の番人 (B16 elite)
+  // A great ash-bronze bell that walks: husk shells on its shoulders, a watching mirror in its face, a mallet in hand.
+  // windup = the mallet raised (大鐘の構え); attack = it strikes its own bell (the ring goes out).
+  const BK = {
+    bell: '#6a5848', bellSh: '#41342a', lip: PAL.brass, lipSh: PAL.brassDark,
+    leg: '#2a2026', canon: PAL.brass, canonSh: PAL.brassDark,
+    rim: '#4a3a58', rimSh: '#2c2238', glass: '#20263a', glassHi: 'rgba(200,220,255,0.28)', face: 'rgba(220,210,255,0.5)',
+    eye: { color: '#d9c4ff', glowColor: 'rgba(170,120,255,0.7)' },
+    haft: '#4a3524', haftSh: '#2e2016', head: '#57504f', headSh: '#2f2a2b', sleeve: '#2a2030', sleeveSh: '#181220',
+    ring: 'rgba(255,205,130,0.75)', aura: 'rgba(255,150,70,0.4)', crack: 'rgba(255,170,90,0.95)',
+  };
+  const BELL = { top: -190, bot: -36, hwTop: 40, hwBot: 68 };
+  function bellPath(c) {
+    const { top, bot, hwTop, hwBot } = BELL, h = bot - top;
+    c.beginPath();
+    c.moveTo(-hwBot, bot);
+    c.bezierCurveTo(-hwBot * 0.86, bot - h * 0.18, -hwTop * 1.08, bot - h * 0.48, -hwTop, top + h * 0.2);
+    c.quadraticCurveTo(-hwTop * 0.92, top, 0, top);
+    c.quadraticCurveTo(hwTop * 0.92, top, hwTop, top + h * 0.2);
+    c.bezierCurveTo(hwTop * 1.08, bot - h * 0.48, hwBot * 0.86, bot - h * 0.18, hwBot, bot);
+    c.quadraticCurveTo(0, bot + 14, -hwBot, bot);
+    c.closePath();
+  }
+  // the mallet in a frame rotated so that local +y points along the haft (angle a from the shoulder)
+  function mallet(ctx, px, py, a) {
+    ctx.save();
+    ctx.translate(px, py); ctx.rotate(a - Math.PI / 2);
+    Art.shape(ctx, (c) => Art.roundRectPath(c, -4, 6, 8, 104, 3), BK.haft, BK.haftSh, { lw: LWT, dx: -2, dy: -2 });
+    Art.shape(ctx, (c) => Art.roundRectPath(c, -20, 100, 40, 26, 6), BK.head, BK.headSh, { dx: -3, dy: -3 });
+    ctx.beginPath(); ctx.moveTo(-20, 108); ctx.lineTo(20, 108); ctx.moveTo(-20, 118); ctx.lineTo(20, 118); Art.strokeOnly(ctx, 1.4, 'rgba(26,18,34,0.6)');
+    Art.shape(ctx, (c) => Art.roundRectPath(c, -8, -8, 16, 30, 7), BK.sleeve, BK.sleeveSh, { lw: LWT, dx: -2, dy: -2 });
+    Art.circlePath(ctx, 0, 24, 7); Art.fs(ctx, BK.leg, LWT);
+    ctx.restore();
+  }
+  function bellkeeperBody(ctx, s) {
+    const t = s.t, sway = Math.sin(t * TAU / 3.2);
+    const lunge = -18 * s.atk, shake = s.hitK * Math.sin(s.p * 60) * 5;
+    const glowK = s.hold ? 0.55 + 0.35 * Math.sin(t * 6) : s.atk;
+    // mallet angle: resting on the ground behind, raised overhead in the 構え, slammed onto the bell's face in the attack
+    const REST = 1.2, RAISED = -1.95, STRIKE = 2.75;
+    let a = s.hold ? RAISED + 0.06 * Math.sin(t * 4) : REST + 0.05 * sway;
+    if (s.pose === 'attack') a = s.p < 0.35 ? Art.lerp(RAISED, STRIKE, ease(s.p / 0.35)) : Art.lerp(STRIKE, REST, ease((s.p - 0.35) / 0.65));
+    ctx.save();
+    ctx.translate(lunge + shake, 0);
+    ctx.rotate(sway * 0.015 - s.atk * 0.05);
+    // feet under the lip
+    for (const [lx, ph] of [[-26, 0], [24, 2.1]]) {
+      const lift = Math.max(0, Math.sin(t * 2 + ph)) * 2;
+      Art.shape(ctx, (c) => Art.blobPath(c, [[lx - 14, 0], [lx - 10, -22 - lift], [lx + 8, -24 - lift], [lx + 12, 0]], 1), BK.leg, PAL.ink, { lw: LWT, dx: -2, dy: -2 });
+      for (const k of [-1, 0, 1]) { ctx.beginPath(); ctx.moveTo(lx + k * 7, -2); ctx.lineTo(lx + k * 8 - 4, 3); Art.strokeOnly(ctx, LWT); }
+    }
+    if (s.hold || s.atk > 0) Art.glow(ctx, 0, -110, 150, BK.aura, 0.25 + 0.45 * glowK);
+    // the mallet behind the bell when resting, in front once raised
+    const front = s.hold || s.pose === 'attack';
+    if (!front) mallet(ctx, 36, -128, a);
+    // canon (the hanging loop) on top, glowing like a coal inside
+    Art.shape(ctx, (c) => { Art.ellipsePath(c, 0, BELL.top - 8, 15, 13); }, BK.canon, BK.canonSh, { lw: LW });
+    Art.circlePath(ctx, 0, BELL.top - 8, 6); ctx.fillStyle = PAL.ink; ctx.fill();
+    Art.glow(ctx, 0, BELL.top - 8, 14, 'rgba(255,140,60,0.7)', 0.5 + 0.5 * glowK);
+    // the bell
+    Art.shape(ctx, bellPath, BK.bell, BK.bellSh, { dx: -6, dy: -5, hi: { x: -22, y: -150, rx: 12, ry: 34, rot: 0.15, color: 'rgba(255,230,180,0.14)' } });
+    // lip band and a raised ring of rivets
+    ctx.save(); bellPath(ctx); ctx.clip();
+    ctx.beginPath(); ctx.moveTo(-BELL.hwBot, BELL.bot - 14); ctx.quadraticCurveTo(0, BELL.bot + 2, BELL.hwBot, BELL.bot - 14);
+    ctx.lineTo(BELL.hwBot, BELL.bot + 20); ctx.lineTo(-BELL.hwBot, BELL.bot + 20); ctx.closePath();
+    Art.fs(ctx, BK.lip, LWT);
+    for (let i = -4; i <= 4; i++) { Art.circlePath(ctx, i * 13, BELL.bot - 6 - (16 - i * i) * 0.35, 2.2); Art.fs(ctx, PAL.brassLight, 1); }
+    // dying: the bell splits
+    if (s.dieK > 0) {
+      ctx.globalAlpha *= Math.min(1, s.dieK * 2);
+      ctx.beginPath(); ctx.moveTo(-4, BELL.top + 10); ctx.lineTo(8, -150); ctx.lineTo(-6, -118); ctx.lineTo(10, -84); ctx.lineTo(-2, BELL.bot + 4);
+      ctx.moveTo(8, -150); ctx.lineTo(30, -140); ctx.moveTo(-6, -118); ctx.lineTo(-34, -104);
+      ctx.lineWidth = 2.4; ctx.strokeStyle = BK.crack; ctx.stroke();
+      Art.glow(ctx, 0, -112, 80, 'rgba(255,140,60,0.6)', s.dieK);
+    }
+    ctx.restore();
+    // ash shells on the shoulders (the same plates as 重ね殻)
+    plate(ctx, 30, -150, 30, 26, 0, glowK, t);
+    plate(ctx, -28, -146, 32, 28, 1, glowK, t);
+    // the watching mirror in the bell's face
+    const mx = -10, my = -102, rx = 22, ry = 27;
+    Art.shape(ctx, (c) => Art.ellipsePath(c, mx, my, rx + 7, ry + 7), BK.rim, BK.rimSh, { lw: LW, dx: -3, dy: -3 });
+    ctx.save(); Art.ellipsePath(ctx, mx, my, rx, ry); ctx.clip();
+    ctx.fillStyle = BK.glass; ctx.fillRect(mx - rx, my - ry, rx * 2, ry * 2);
+    ctx.globalAlpha = 0.5 + 0.3 * glowK;
+    Art.ellipsePath(ctx, mx, my - 2, 13, 18); ctx.fillStyle = BK.face; ctx.fill();
+    ctx.globalAlpha = 1;
+    Art.enemyEye(ctx, mx - 6, my - 6, 2.8, Object.assign({ slit: 1 }, BK.eye));
+    Art.enemyEye(ctx, mx + 6, my - 6, 2.8, Object.assign({ slit: 1 }, BK.eye));
+    const sw = ((t * 0.3) % 1) * (rx * 4) - rx * 2;
+    ctx.beginPath(); ctx.moveTo(mx + sw - 6, my - ry); ctx.lineTo(mx + sw + 6, my - ry); ctx.lineTo(mx + sw - 14, my + ry); ctx.lineTo(mx + sw - 26, my + ry); ctx.closePath();
+    ctx.fillStyle = BK.glassHi; ctx.fill();
+    if (s.hitK > 0.05 || s.dieK > 0) {
+      ctx.globalAlpha = Math.max(s.hitK, s.dieK);
+      ctx.beginPath();
+      for (const [ang, l] of [[-0.7, 30], [0.5, 34], [2.3, 26], [3.7, 30]]) { ctx.moveTo(mx + 2, my); ctx.lineTo(mx + 2 + Math.cos(ang) * l * 0.5, my + Math.sin(ang) * l * 0.5 + 3); ctx.lineTo(mx + 2 + Math.cos(ang) * l, my + Math.sin(ang) * l); }
+      ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(235,240,255,0.9)'; ctx.stroke();
+    }
+    ctx.restore();
+    Art.ellipsePath(ctx, mx, my, rx, ry); Art.strokeOnly(ctx, LWT);
+    if (front) mallet(ctx, 36, -128, a);
+    ctx.restore();
+    // the ring: waves out from the bell when struck
+    if (s.pose === 'attack' && s.p > 0.3) {
+      const k = seg(s.p, 0.3, 1);
+      ctx.save();
+      for (let i = 0; i < 3; i++) {
+        const r = 60 + (k * 150) + i * 26;
+        ctx.globalAlpha = (1 - k) * (1 - i * 0.28);
+        ctx.beginPath(); ctx.ellipse(lunge, -112, r, r * 0.7, 0, Math.PI * 0.55, Math.PI * 1.45);
+        ctx.lineWidth = 4 - i; ctx.strokeStyle = BK.ring; ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+  Art.registerEnemy('bellkeeper', {
+    info: { height: 210, width: 160, fx: [-10, -112], head: [0, -226] },
+    draw(ctx, pose, opts) {
+      const s = st(pose, opts);
+      fadeLayer(ctx, 1 - 0.95 * s.dieK, (c) => {
+        if (s.dieK > 0) { c.translate(0, s.dieK * 18); c.rotate(s.dieK * 0.12); }
+        bellkeeperBody(c, s);
+      });
+      motes(ctx, s.dieK, 0, -110, 160, 160, 30, '#ffb87a', 83);
     },
   });
 })();

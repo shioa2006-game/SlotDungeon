@@ -4,6 +4,7 @@
  *   node tools/test_script.js unit       (unit tests only)
  *   node tools/test_script.js regress [runs]
  *   node tools/test_script.js bell [fights]  灰鐘の番人: the 構え / 大鐘 previews against random play (sends, borrows, 連鎖)
+ *   node tools/test_script.js kurite [fights] 深淵の繰り手 (B17): strings, 三本断ち, the hang — previews against random play
  * The regression baseline is the vertical-slice commit (git 89b29f1); it is loaded side by side in its own VM context. */
 'use strict';
 const path = require('path');
@@ -950,6 +951,169 @@ function unit() {
     ok(rp && Ts.strikeHp === rp.hp && Ts.strikeHp === 200 - Rs.reaper && oldEst === 200, `死神 through a shell: 発動後 ${Ts.strikeHp} (exact), where the old estimate said ${oldEst}`);
   }
 
+  section('深淵の繰り手 (stage 4b): 糸 — attached at the spin, cut only by your own hand, never by 再演');
+  // (the whole tree but 連鎖, so the previews stay exact)
+  const ALL = D.SKILLS.map((s) => s.id).filter((id) => id !== 'chain');
+  const kur = (o) => fightRun(SD, ALL, 'kurite', 17, Object.assign({ sparks: 4, seed: 41 }, o || {}));
+  // put the boss on 終幕の段's countdown: step 0 秒読み・三 (strings ①髑髏 ②灯), 1 秒読み・二 (②髑髏 ③灯), 2 最後の糸 (③髑髏 ①灯), 3 終幕
+  const act3 = (run, step, cuts, hp) => {
+    const e = run.enemy; e.hp = hp; e.phase = 3; e.phaseFor = 3; e.phaseAt = 0; e.cursor = step; e.cutCount = cuts;
+    e.intent = run._readCell(e); e.now = e.intent.now || null;
+  };
+  const cutBy = (run, i) => run.nudge(i, run.canNudge(i, 1) ? 1 : -1);
+  {
+    const run = kur(), e = run.enemy;
+    eq([e.intent.label, e.intent.threads], ['糸引き', [{ reel: 0, s: 'skull' }]], 'act 1 opens with 糸引き: reel 1 is written 髑髏');
+    const ev = run.spin();
+    ok(run.isStrung(0) && run.paylineCell(0).s === 'skull' && !run.isStrung(1) && !run.isStrung(2), 'the strung reel shows the written cell');
+    eq(ev[0].threads, [{ reel: 0, s: 'skull' }], 'the spin event names the strings');
+    ok(!run.canHold(0) && run.toggleHold(0)[0].reason === 'thread', 'a strung reel cannot be held');
+    const pos0 = run.reels[0].pos;
+    run.respin();
+    ok(run.isStrung(0) && run.reels[0].pos === pos0 && run.paylineCell(0).s === 'skull', '再演 never spins a strung reel');
+    const F0 = run.forecast();
+    eq([F0.threads, F0.threadCuts, F0.threadDmg], [1, 0, 0], 'accepted: no 反動');
+    const nev = cutBy(run, 0);
+    ok(nev[0].cut === true && !run.isStrung(0) && run.wasCut(0), 'a nudge cuts it (the event says so)');
+    const F = run.forecast();
+    eq([F.threadCuts, F.threadDmg], [1, D.THREADS.backlash], 'forecast: one cut, 反動 20');
+    const P = run.previewTurn(), hp0 = e.hp;
+    const rev = run.resolve();
+    const th = rev.find((x) => x.t === 'threads');
+    eq([th.cut, th.of, th.dmg, th.count], [1, 1, 20, undefined], 'resolve: 反動 20 (no count outside the countdown)');
+    ok(rev.findIndex((x) => x.t === 'threads') < rev.findIndex((x) => x.t === 'enemyTurn'), '反動 lands in the player\'s turn');
+    eq(e.hp, P.enemyAfter.hp, 'enemy HP == preview');
+    ok(hp0 - e.hp >= 20, 'the enemy took the 反動');
+  }
+  {
+    // each of the other hands cuts exactly one string
+    const tries = [
+      ['運命の鍵', (run) => run.fateKey(0, (run.reels[0].pos + 1) % run.reels[0].strip.length)],
+      ['写し身', (run) => run.echo(1, 0)],
+      ['祝福 (髑髏の糸)', (run) => run.bless(0)],
+    ];
+    for (const [name, act] of tries) {
+      const run = kur({ seed: 43 }); run.spin();
+      if (name === '写し身' && run.paylineCell(1).s === 'skull') run.reels[1].pos = (run.reels[1].pos + 1) % run.reels[1].strip.length;
+      const ev = act(run);
+      ok(ev.length && ev[0].cut === true && !run.isStrung(0) && run.forecast().threadCuts === 1, `${name} cuts the string`);
+    }
+  }
+  section('深淵の繰り手: 終幕の段 — the strings cut on the countdown add up to 三本断ち');
+  {
+    const run = kur({ seed: 45 }), e = run.enemy;
+    act3(run, 0, 0, 470);
+    eq([e.intent.label, e.intent.countdown, e.intent.threads.map((t) => t.reel)], ['秒読み・三', 3, [0, 1]], '秒読み・三: strings on reels 1 and 2');
+    run.spin(); cutBy(run, 1);
+    let F = run.forecast();
+    eq([F.cutCount, F.threeCut], [1, false], 'one cut: 1/3');
+    let ev = run.resolve();
+    eq([e.cutCount, ev.find((x) => x.t === 'threads').count, e.intent.label], [1, 1, '秒読み・二'], 'the count carries to the next turn');
+    run.sparks = 4; run.spin(); cutBy(run, 1); // reel 2 again, on another turn
+    F = run.forecast();
+    eq([F.cutCount, F.threeCut], [2, false], 'the same reel cut on another turn counts again: 2/3');
+    run.resolve();
+    eq([e.cutCount, e.intent.label], [2, '最後の糸'], '最後の糸 comes with 2/3');
+    run.sparks = 4; run.spin();
+    ok(!run.evaluate([{ s: 'ward' }, { s: 'ward' }, { s: 'blade' }]).staggerWard, 'two wards do not break 最後の糸 (only 三本断ち does)');
+    cutBy(run, 2);
+    F = run.forecast();
+    eq([F.cutCount, F.threeCut, F.threadDmg], [3, true, D.THREADS.backlash + D.THREADS.threeCut], '3/3: 三本断ち (+80 on top of the 反動)');
+    const P = run.previewTurn();
+    ev = run.resolve();
+    const th = ev.find((x) => x.t === 'threads');
+    ok(th.three && th.reset && th.count === 3, 'the threads event: 三本断ち, the count resets');
+    const sk = ev.find((x) => x.t === 'staggerCancel');
+    ok(sk && sk.skipped && sk.skipped.label === '終幕', '三本断ち on 最後の糸 strikes out 終幕');
+    eq(P.skipped && P.skipped.label, '終幕', '...as previewed');
+    eq([e.cutCount, e.intent.label], [0, '秒読み・三'], 'count 0, the countdown starts over at 3');
+  }
+  {
+    // 三本断ち on a 秒読み cell: the action is lost and the countdown goes back to 3
+    const run = kur({ seed: 47 }), e = run.enemy;
+    act3(run, 1, 1, 470);
+    run.spin(); cutBy(run, 1); cutBy(run, 2);
+    const F = run.forecast();
+    ok(F.threeCut && F.cutCount === 3, '1 + 2 cuts on 秒読み・二: 三本断ち');
+    const hp0 = run.hp, ev = run.resolve();
+    ok(ev.some((x) => x.t === 'stunned') && !ev.some((x) => x.t === 'enemyAttack'), 'the enemy loses its 秒読み attack');
+    eq([e.cutCount, e.intent.label, run.hp <= hp0], [0, '秒読み・三', true], 'the countdown and the count start over');
+  }
+  {
+    // a 終幕 that is played starts the count over — also when it comes as a 借り火 debt
+    const run = kur({ seed: 49 }), e = run.enemy;
+    act3(run, 2, 1, 470);
+    run.sparks = 4; run.spin(); run.resolve(); // 最後の糸 accepted: 1/3 stays
+    eq([e.cutCount, e.intent.label], [1, '終幕'], '終幕 comes, the count still 1');
+    run.hp = run.maxHp; run.spin(); run.resolve();
+    eq(e.cutCount, 0, 'the played 終幕 resets the count');
+    const r2 = kur({ seed: 51 }), e2 = r2.enemy;
+    act3(r2, 2, 2, 470);
+    r2.sparks = 0; r2.spin();
+    ok(r2.canBorrow(), 'can borrow at 0 sparks');
+    r2.borrow(); r2.hp = r2.maxHp;
+    const ev = r2.resolve();
+    ok(ev.some((x) => x.t === 'debtAction' && x.intent.label === '終幕'), 'the debt plays 終幕');
+    eq(e2.cutCount, 0, 'a 終幕 played as a debt resets the count too');
+  }
+  section('深淵の繰り手: the hang — only 三本断ち takes its last HP');
+  {
+    const run = kur({ seed: 53 }), e = run.enemy;
+    act3(run, 0, 0, 3);
+    run.spin();
+    const F = run.forecast();
+    ok(F.totalDmg >= 3 && run.hangSaves(F), 'the line would fell it, but no 三本断ち');
+    const P = run.previewTurn();
+    ok(!P.enemyDies && P.strikeHp === 1, 'preview: it hangs at 1 HP');
+    const ev = run.resolve();
+    ok(e.hp === 1 && run.enemy === e && ev.some((x) => x.t === 'hung' && x.held > 0) && !ev.some((x) => x.t === 'enemyDie'), 'it hangs at 1 HP (the hung event says how much was held back)');
+    // burn on its own turn stops at 1 too
+    const r2 = kur({ seed: 55 }), e2 = r2.enemy;
+    act3(r2, 0, 0, 300); e2.burn = 900;
+    r2.spin();
+    const ev2 = r2.resolve(), bi = ev2.findIndex((x) => x.t === 'burnTick');
+    ok(e2.hp === 1 && bi >= 0 && ev2.findIndex((x, i) => i > bi && x.t === 'hung') > bi && !ev2.some((x) => x.t === 'enemyDie'), 'burn on the enemy turn stops at 1 HP');
+    // and 三本断ち fells it: the run is won
+    const r3 = kur({ seed: 57 }), e3 = r3.enemy;
+    act3(r3, 1, 2, 1);
+    r3.spin(); cutBy(r3, 1);
+    const F3 = r3.forecast(), P3 = r3.previewTurn();
+    ok(F3.threeCut && !r3.hangSaves(F3) && P3.enemyDies, '三本断ち: the preview says it falls');
+    r3.resolve();
+    ok(e3.hp === 0 && r3.phase === 'won' && r3.summary && r3.summary.won, '三本断ち fells it: the run is won');
+  }
+  section('深淵の繰り手: 台本送り carries the strings with the cell; acts; 手繰り');
+  {
+    const run = kur({ seed: 59 }), e = run.enemy;
+    act3(run, 0, 0, 470);
+    run.spin(); cutBy(run, 1);
+    run.advance();
+    eq(e.intent.label, '秒読み・二', 'sent: 秒読み・二 is now');
+    ok(!run.isStrung(0) && !run.wasCut(0), 'the sent cell\'s uncut string is released, not cut');
+    ok(!run.isStrung(1) && run.wasCut(1) && run.isStrung(2), 'reel 2 (cut this turn) stays free; reel 3 is strung');
+    eq(run.forecast().threadCuts, 1, 'one cut counts');
+  }
+  {
+    const run = kur({ seed: 61 }), e = run.enemy;
+    e.cursor = 2; e.phaseAt = 0; e.phaseFor = 1; e.intent = run._readCell(e); e.now = null; e.hp = 961;
+    eq(e.intent.label, '吊り上げ', 'act 1: 吊り上げ (a charge)');
+    run.spin(); setPayline(run, ['ward', 'ward', 'blade']);
+    ok(run.forecast().staggerWard, 'two wards break 吊り上げ (it is not a 最後の糸)');
+    const ev = run.resolve();
+    eq([e.phase, e.intent.label], [2, '二重引き'], 'crossing 60%: act 2 starts from its first cell');
+    ok(!ev.some((x) => x.t === 'staggerCancel'), 'the old act\'s 落とし is not struck into the new act');
+  }
+  {
+    const run = kur({ seed: 63 }), e = run.enemy;
+    e.cursor = 1; e.phaseAt = 0; e.phaseFor = 1; e.intent = run._readCell(e); e.now = null;
+    run.sparks = 3; run.spin(); setPayline(run, ['ward', 'heart', 'ward']);
+    const s0 = run.sparks, ev = run.resolve();
+    ok(ev.some((x) => x.t === 'drain') && run.sparks <= s0, 'act 1 手繰り steals a spark');
+    const r2 = kur({ seed: 65 }), e2 = r2.enemy;
+    e2.phase = 2; e2.phaseFor = 2; e2.phaseAt = 0; e2.cursor = 1; e2.hp = 900; e2.intent = r2._readCell(e2); e2.now = e2.intent.now || null;
+    eq([e2.intent.label, !!e2.intent.steal], ['面打ち', false], 'act 2: 面打ち does not steal');
+  }
+
   section('save / load: old saves load, new fields default safely');
   {
     const store = {};
@@ -1198,10 +1362,77 @@ function bellFuzz(N) {
   ok(bad === 0 && tally.brokenByHits > 50 && tally.brokenByWards > 20 && tally.held > 50 && tally.chainBreaks > 0 && tally.sends > 50 && tally.borrows > 50, `灰鐘の番人: previews == actual (${bad} mismatches)`);
 }
 
+// ================================================================== 深淵の繰り手 fuzz: the strings / 三本断ち / the hang, exactly as previewed
+function kuriteFuzz(N) {
+  section(`深淵の繰り手 fuzz: ${N} fights, random acts / HP / counts and random play (cuts, 再演, sends, borrows)`);
+  const SD = currentSD();
+  const R = SD.Util.makeRng(4242);
+  const clean = (x) => JSON.stringify(x, (k, v) => (k === 'random' ? undefined : v));
+  let bad = 0, resolves = 0;
+  const T = { three: 0, threeKill: 0, hung: 0, finale: 0, sends: 0, borrows: 0, respinCut: 0, cuts: 0 };
+  const fail = (m) => { bad++; if (bad <= 6) console.log('  ✗ ' + m); };
+  for (let n = 0; n < N; n++) {
+    const ids = SD.Data.SKILLS.filter(() => R.chance(0.85)).map((s) => s.id).concat(['nudge', 'respin', 'hyoshigi', 'borrow']);
+    const run = fightRun(SD, ids, 'kurite', 17, { seed: 900 + n });
+    const e = run.enemy;
+    const hpPct = R.pick([1, 0.8, 0.62, 0.5, 0.35, 0.25, 0.1, 0.02]);
+    e.hp = Math.max(1, Math.round(e.maxHp * hpPct));
+    e.phase = e.hp <= e.maxHp * 0.3 ? 3 : e.hp <= e.maxHp * 0.6 ? 2 : 1;
+    e.phaseFor = e.phase; e.phaseAt = 0; e.cursor = R.int(8); e.cutCount = e.phase === 3 ? R.int(3) : 0;
+    e.mirrorSym = R.pick(['blade', 'flame', 'ward', 'heart']);
+    e.intent = run._readCell(e); e.now = e.intent.now || null;
+    run.hp = Math.max(10, Math.round(run.maxHp * (0.3 + R.next() * 0.7)));
+    run.sparks = R.int(run.maxSparks + 1);
+    for (let t = 0; t < 30 && run.phase === 'idle' && run.enemy === e; t++) {
+      run.spin();
+      for (let a = 0; a < 4 && run.phase === 'spun'; a++) {
+        const k = R.int(9);
+        if (k === 0 && run.canAdvance()) { run.advance(); T.sends++; }
+        else if (k === 1 && run.canBorrow()) { run.borrow(); T.borrows++; }
+        else if (k === 2 && run.canNudgeAny()) { const i = R.int(3), d = R.pick([-2, -1, 1, 2]); if (run.canNudge(i, d)) run.nudge(i, d); }
+        else if (k === 3 && run.canRespin()) {
+          for (let i = 0; i < 3; i++) if (R.chance(0.4) && run.canHold(i)) run.toggleHold(i);
+          const before = [0, 1, 2].map((i) => run.isStrung(i));
+          run.respin();
+          if (before.some((s, i) => s && !run.isStrung(i))) T.respinCut++;
+        }
+        else if (k === 4 && run.canEchoAny()) { for (let s = 0; s < 3; s++) for (let u = 0; u < 3; u++) if (run.phase === 'spun' && run.canEcho(s, u) && R.chance(0.3)) run.echo(s, u); }
+        else if (k === 5 && run.canFateKey()) { const i = R.int(3); if (run.canFateKey(i)) run.fateKey(i, R.int(run.reels[i].strip.length)); }
+        else if (k === 6 && run.canBlessAny()) { for (let i = 0; i < 3; i++) if (run.canBless(i)) { run.bless(i); break; } }
+        else if (k === 7) { const i = R.int(3); if (run.isStrung(i) && run.canHold(i)) fail('a strung reel can be held'); }
+      }
+      if (run.phase !== 'spun') break;
+      const it0 = e.intent, F = run.forecast(), P = run.previewTurn(), B = run.scriptBand();
+      const nx = B && B.cells.find((c) => c.role === 'next');
+      const ev = run.resolve();
+      resolves++;
+      const th = ev.find((x) => x.t === 'threads');
+      const died = ev.some((x) => x.t === 'enemyDie');
+      if (th) { T.cuts += th.cut; if (th.three) { T.three++; if (died) T.threeKill++; } }
+      if (ev.some((x) => x.t === 'hung')) T.hung++;
+      if (ev.some((x) => x.t === 'enemyAttack' && x.heavy && it0.finale)) T.finale++;
+      if (th && (th.cut !== F.threadCuts || th.three !== F.threeCut)) fail(`fight ${n}: strings forecast ${F.threadCuts}/${F.threeCut} actual ${th.cut}/${th.three}`);
+      if (!th && F.threads) fail(`fight ${n}: the forecast had strings, none resolved`);
+      if (died && !(th && th.three)) fail(`fight ${n} turn ${t}: fell without 三本断ち`);
+      if (th && th.three && run.enemy === e && e.cutCount !== 0) fail(`fight ${n}: the count did not reset after 三本断ち`);
+      if (!P.random) {
+        if (P.enemyDies !== died) fail(`fight ${n} turn ${t}: dies preview ${P.enemyDies} actual ${died}`);
+        if (!(run.hp === P.hpAfter || (P.partyDies && run.phase === 'dead'))) fail(`fight ${n} turn ${t}: party HP preview ${P.hpAfter} actual ${run.hp}`);
+        if (P.enemyAfter && run.enemy === e && e.hp !== P.enemyAfter.hp) fail(`fight ${n} turn ${t}: enemy HP preview ${P.enemyAfter.hp} actual ${e.hp}`);
+        if (nx && !nx.cond && !nx.unknown && run.enemy === e && run.phase === 'idle' && clean(nx.it) !== clean(e.intent)) fail(`fight ${n} turn ${t}: band next ${clean(nx.it)} actual ${clean(e.intent)}`);
+      }
+      if (run.enemy === e && run.phase === 'idle' && e.hp <= 0) fail(`fight ${n}: enemy hp ${e.hp} while the fight goes on`);
+    }
+  }
+  console.log(`  resolves ${resolves}; cuts ${T.cuts}, 三本断ち ${T.three} (falls ${T.threeKill}), hangs ${T.hung}, 終幕 landed ${T.finale}; sends ${T.sends}, borrows ${T.borrows}; strings cut by 再演 ${T.respinCut}`);
+  ok(bad === 0 && T.respinCut === 0 && T.three > 50 && T.threeKill > 20 && T.hung > 50 && T.finale > 20 && T.sends > 100 && T.borrows > 50, `深淵の繰り手: previews == actual (${bad} mismatches)`);
+}
+
 const mode = process.argv[2] || 'all';
 if (mode === 'all' || mode === 'unit') unit();
 if (mode === 'all' || mode === 'regress') regress(+process.argv[3] || 400);
 if (mode === 'all' || mode === 'boss') bossFuzz(+process.argv[3] || 600);
 if (mode === 'all' || mode === 'bell') bellFuzz(+process.argv[3] || 1200);
+if (mode === 'all' || mode === 'kurite') kuriteFuzz(+process.argv[3] || 1500);
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

@@ -146,6 +146,24 @@
     shift: '盾2つで手前の強撃を不発にすると、ここは1コマ繰り上がる',
     mirror: '返し鏡の封じは、その前の発動で決まる（まだ決まっていない）',
   };
+  // ---------------------------------------------------------------- 糸 (深淵の繰り手)
+  const REEL_NO = ['①', '②', '③'];
+  UI.isFinal = (run) => { const D = run && run.enemy && SD.Data.ENEMIES[run.enemy.id]; return !!(D && D.final); };
+  // "①髑髏 ③灯"
+  UI.threadList = (threads) => (threads || []).map((t) => REEL_NO[t.reel] + SD.Data.SYMBOLS[t.s].name).join(' ');
+  UI.threadExplain = (it) => {
+    if (!it || !it.threads || !it.threads.length) return null;
+    const S = (s) => UI.symName(s);
+    return `<b>糸</b>：${it.threads.map((t) => `リール${t.reel + 1}を${S(t.s)}`).join('、')}に。回すと、そのリールの発動列はこの目になる。` +
+      '<b>自分の手でそのリールを動かすと糸が切れる</b>（ずらし・遠押し・運命の鍵・写し身・祝福。1回で1本。再演では断てない）';
+  };
+  // the rules of the final boss, for the tooltips and the left panel
+  UI.FINAL_RULES = [
+    `糸を1本断つごとに、繰り手に<b>反動 ${SD.Data.THREADS.backlash}</b>`,
+    `<b>終幕の段</b>：秒読みの間に断った糸が合わせて${SD.Data.THREADS.need}本になると<b>三本断ち</b>（+${SD.Data.THREADS.threeCut}、繰り手は行動を失い、秒読みが3に戻る）。同じリールの糸を別のターンに断っても数える`,
+    '<b>繰り手は三本断ちでしか倒れない</b>。それまで HP は 1 で止まる（糸で吊られている）',
+  ];
+
   // icon / value / corner badges for one script cell { role, it, dmg, unknown, cond, locked }
   UI.cellInfo = (run, c) => {
     const it = (c && c.it) || {};
@@ -173,6 +191,9 @@
     }
     if (c && c.cond === 'mirror') { I.sym = null; I.now = 'mark'; I.markUnknown = true; } // the seal is not decided yet
     if (it.guard && (it.k === 'attack' || it.k === 'charge')) I.guard = it.guard;
+    if (it.threads && it.threads.length) I.threads = it.threads;
+    if (it.countdown) { I.icon = it.k === 'charge' ? 'charge' : 'doom'; I.countdown = it.countdown; }
+    if (it.finale) I.icon = 'doom';
     return I;
   };
   UI.cellExplain = (run, c) => {
@@ -181,11 +202,15 @@
     else lines.push(UI.intentExplain(run, c.cond === 'mirror' ? Object.assign({}, c.it, { now: null }) : c.it, c.dmg)); // an undecided seal is not described as decided
     if (c.role === 'skip') lines.push(breaks(run) ? '<b>構えが崩れる</b>：この大鐘は台本から消え、行われない' : '<b>盾2つで怯ませる</b>：この強撃は台本から消え、行われない');
     if (c.role === 'debt') lines.push('<b>借りの代償</b>：灰輪はこの一手も、このターンのうちに行う');
+    const tx = c.it && !c.unknown ? UI.threadExplain(c.it) : null;
+    if (tx) lines.push(`<span style="color:#ffe1a0">${tx}</span>`);
     const enm = run.enemy ? SD.Data.ENEMIES[run.enemy.id].name : '返し鏡';
     if (c.cond === 'mirror') lines.push(`<span style="color:#e2c8ff"><b>封じ：？</b>　${enm}は、その前の発動でいちばん多く働いた記号を封じる。回した後は「次」の封じが確定して表示される</span>`);
-    if (c.cond) lines.push(`<span style="color:#e2c8ff">？ ${c.cond === 'mirror' ? enm + 'の封じは、その前の発動で決まる（まだ決まっていない）' : (breaks(run) && UI.BAND_COND_BREAK[c.cond]) || UI.BAND_COND[c.cond] || '変わる可能性がある'}</span>`);
+    const condText = c.cond === 'hp' && UI.isFinal(run) ? '繰り手のHPが60%・30%を切ると段が変わり、台本は書き換わる' : null;
+    if (c.cond) lines.push(`<span style="color:#e2c8ff">？ ${c.cond === 'mirror' ? enm + 'の封じは、その前の発動で決まる（まだ決まっていない）' : condText || (breaks(run) && UI.BAND_COND_BREAK[c.cond]) || UI.BAND_COND[c.cond] || '変わる可能性がある'}</span>`);
     if (c.locked && run.mods.script) lines.push('<span style="color:#e8bf6a">溜め終えた一撃は台本から外せない（早めることはできる）</span>');
-    if (c.actChange) lines.push(`<span style="color:#e2c8ff"><b>幕</b>：この発動で灰輪は第${c.actChange}幕へ移り、台本が書き換わる。これは新しい幕のコマで、台本送りでは届かない（送ると今の幕の次のコマになる）</span>`);
+    if (c.actChange) lines.push(UI.isFinal(run) ? `<span style="color:#e2c8ff"><b>段</b>：この発動で繰り手は${['', '糸の段', '面の段', '終幕の段'][c.actChange]}へ移り、台本が書き換わる。これは新しい段のコマで、台本送りでは届かない</span>`
+      : `<span style="color:#e2c8ff"><b>幕</b>：この発動で灰輪は第${c.actChange}幕へ移り、台本が書き換わる。これは新しい幕のコマで、台本送りでは届かない（送ると今の幕の次のコマになる）</span>`);
     if (c.role === 'next' && !c.cond && !c.unknown) lines.push('<span style="color:#b9ad95">このまま発動すれば、次のターンはこれになる</span>');
     const e = run.enemy;
     if (e && e.boss && e.seals > 0 && c.role !== 'now' && !c.actChange && c.it && (c.it.k === 'attack' || c.it.k === 'jam'))
@@ -206,7 +231,7 @@
         if (it.doomTick) { I.icon = 'doom'; I.label = `破滅まで ${it.doomN}`; I.danger = true; }
         break;
       case 'doom': I.icon = 'doom'; I.value = dmg; I.label = it.label || '灰燼'; I.danger = true; break;
-      case 'charge': I.icon = 'charge'; I.value = dmg || null; I.label = band ? (it.label || '溜め') : `${it.label || '溜め'} → 次は${it.nextLabel || '強撃'}`; I.danger = true; I.hint = breaks(run) ? '殻を割り切るか、盾2つで崩す' : '盾2つで怯ませて止める'; break;
+      case 'charge': I.icon = 'charge'; I.value = dmg || null; I.label = band ? (it.label || '溜め') : `${it.label || '溜め'} → 次は${it.nextLabel || '強撃'}`; I.danger = true; I.hint = breaks(run) ? '殻を割り切るか、盾2つで崩す' : it.threadOnly ? '三本断ちで終幕を消す' : '盾2つで怯ませて止める'; break;
       case 'guard': I.icon = 'guard'; I.value = it.v; I.label = '防御'; break;
       case 'hex': I.icon = 'hex'; I.value = it.v; I.label = it.label || '呪い'; break;
       case 'drain': I.icon = 'drain'; I.value = run.sparks > 0 ? null : it.v; I.label = run.sparks > 0 ? '火種を吸う' : '吸火（攻撃）'; break;
@@ -225,6 +250,10 @@
       if (n.k === 'mark') I.now = { icon: 'mark', sym: n.sym, label: SD.Data.SYMBOLS[n.sym].name + 'を封じ', glow: 'rgba(197,139,255,0.7)' };
       if (n.k === 'reflect') I.now = { icon: 'reflect', label: '与ダメ半分反射', glow: 'rgba(220,220,255,0.6)' };
     }
+    if (it.threads && it.threads.length) I.threads = it.threads;
+    if (it.steal) I.label += '・火種を奪う';
+    if (it.countdown && it.k !== 'charge') { I.icon = 'doom'; I.danger = true; }
+    if (it.finale) I.icon = 'doom';
     I.width = I.value != null ? (I.sym ? 140 : 108) : 96;
     if ((it.k === 'attack' || it.k === 'doom' || it.k === 'jam') && dmg >= run.hp + run.block) I.lethal = true;
     return I;
@@ -240,6 +269,8 @@
       const wardOk = sealed !== 'ward';
       return { syms: ['blade', 'flame'].filter((s) => s !== sealed).concat(wardOk ? ['ward'] : []), text: wardOk ? 'で殻を割り切るか、盾2つで大鐘を崩す' : 'で殻を割り切って大鐘を崩す（盾は封じられている）' };
     }
+    if (it.threadOnly) return { syms: [], text: `秒読みの間に糸を合わせて${SD.Data.THREADS.need}本断つと三本断ち。終幕は消える` };
+    if (it.countdown) return { syms: [], text: `三本断ちまで あと${Math.max(0, SD.Data.THREADS.need - ((run.enemy && run.enemy.cutCount) || 0))}本。糸の張られたリールを自分の手で動かす` };
     if (n && n.k === 'mark') return { syms: [n.sym], avoid: true, text: 'は出すと自分が傷つく。ずらして外す' };
     if (n && n.k === 'reflect') return { syms: ['ward', 'heart'], text: 'で受け流す（攻撃すると半分返る）' };
     if (n && n.k === 'curl') return { syms: ['flame'], text: 'は鎧を無視する' };
@@ -272,6 +303,7 @@
           lines.push(`<b>このターン、剣・焔の直撃で殻を割り切るか、盾を2つ揃えると構えが崩れ、${it.nextLabel || '強撃'}は台本から消える</b>`);
           break;
         }
+        if (it.threadOnly) { lines.push(`${it.label}。次のターンに${it.nextLabel || '強撃'} ${it.next || ''}`); lines.push(`<b>盾では止まらない。秒読みの間に糸を合わせて${SD.Data.THREADS.need}本断つ（三本断ち）と、${it.nextLabel || '強撃'}は台本から消える</b>`); break; }
         lines.push('力を溜めている。次のターンに強撃'); lines.push('<b>このターン盾を2つ揃えると怯んで中断</b>'); break;
       case 'guard': lines.push(`次のターン、ブロック ${it.v} を得る（剣と焔を吸収）`); break;
       case 'hex': lines.push(`あなたのリールに髑髏を ${it.v} 個混ぜる（この戦闘中）`); break;
@@ -288,6 +320,11 @@
       if (n.k === 'mark') lines.push(`<b>このターン</b> ${S(n.sym)} は封じられ、発動列に出ると1つにつき2ダメージ${n.next ? '（次は ' + S(n.next) + '）' : ''}`);
       if (n.k === 'reflect') lines.push('<b>このターン</b> 与えたダメージの半分が返ってくる（ブロックで受けられる）');
     }
+    const tx = UI.threadExplain(it);
+    if (tx) lines.push(`<span style="color:#ffe1a0">${tx}</span>`);
+    if (it.countdown) lines.push(`<span style="color:#ffe1a0">終幕の段・秒読み ${it.countdown}：断った糸 ${(run.enemy && run.enemy.cutCount) || 0}/${SD.Data.THREADS.need}。${SD.Data.THREADS.need}本で三本断ち（同じリールの糸を別のターンに断っても数える）</span>`);
+    if (it.finale) lines.push('<span style="color:#ffe1a0">終幕：盾で受けるか、守護の誓いで跳ね返す。終幕が来ると、断った糸の数は0に戻る</span>');
+    if (it.steal) lines.push(`同時に<b>火種を${it.steal}つ奪う</b>（火種があるとき）`);
     if (it.guard && (it.k === 'attack' || it.k === 'charge')) lines.push(`同時に<b>殻（防御）${it.guard}</b>を得る。次の自分のターン、剣・焔の直撃を ${it.guard} まで受け止める（燃焼・棘・死神は素通り）`);
     const ED = run.enemy && SD.Data.ENEMIES[run.enemy.id];
     if (ED && ED.mirror && it.now && it.now.k === 'mark') lines.push(`<span style="color:#e2c8ff">${ED.name}：封じるのは、前のターンの発動でいちばん多く働いた記号（最初はいちばん多く彫った記号）。台本を送っても外れない</span>`);

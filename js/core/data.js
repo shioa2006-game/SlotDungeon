@@ -40,6 +40,8 @@
     abyss:     { id: 'abyss',     name: '灰輪の座',       music: 'boss',      floors: [12, 12] },
     // 第四層 (after the boss, once the game has been cleared): enemies keep their listed numbers (no depth scaling)
     ashdeep:   { id: 'ashdeep',   name: '灰の底',         music: 'gearworks', floors: [13, 16], deep: true },
+    // B17 (stage 4, docs/EXPANSION_4A_SPEC.md): the true final boss's room. Reached only from the stage 4d entrances.
+    deepest:   { id: 'deepest',   name: '最深の間',       music: 'boss',      floors: [17, 17], deep: true },
   };
   const FLOORS = {
     1:  { zone: 'cellar', type: 'normal', pool: ['rat', 'slime'] },
@@ -59,10 +61,15 @@
     14: { zone: 'ashdeep', type: 'battle', deepSlot: 1 },
     15: { zone: 'ashdeep', type: 'normal', pool: ['husk', 'mirror'] },
     16: { zone: 'ashdeep', type: 'elite', enemy: 'bellkeeper' },
+    17: { zone: 'deepest', type: 'boss', enemy: 'kurite' },
   };
   const LAST_FLOOR = 12;
   const DEEP_FIRST_FLOOR = 13, DEEP_LAST_FLOOR = 16;
   const DEEP_PAIR = ['husk', 'mirror'];
+  const FINAL_FLOOR = 17;
+  // 糸 (深淵の繰り手, docs/EXPANSION_4A_SPEC.md §2.2 / §11): backlash = damage per string cut by your own hand; threeCut =
+  // the extra damage of 三本断ち; need = strings to cut on 終幕の段's countdown for 三本断ち (they add up over the countdown).
+  const THREADS = { backlash: 20, threeCut: 80, need: 3 };
   // Shortcut starts (free milestones): what you receive instead of the skipped floors.
   const SHORTCUTS = {
     5: { gate: 'bellhound', carvings: 3, relics: 1, embers: 25, label: '第二層から' },
@@ -253,6 +260,56 @@
     },
   });
 
+  // ---------------------------------------------------------------- B17 最深の間 (docs/EXPANSION_4A_SPEC.md §2, §11)
+  // Script cells may carry threads [{ reel, s }]: when the reels are spun, a strung reel's payline shows s (an override, as
+  // 写し身). Your own hand on that reel (ずらし / 遠押し / 運命の鍵 / 写し身 / 祝福) cuts it; 再演 and 連鎖 never spin it.
+  // Three acts by HP (phases): 糸の段 one string a turn, 面の段 two strings + the mirror's seal, 終幕の段 the countdown
+  // (秒読み 3 → 2 → 最後の糸 → 終幕). Strings cut on the countdown's cells add up (e.cutCount; the same reel cut again on
+  // another turn counts again); THREADS.need of them is 三本断ち: the action is lost and the countdown and its count start
+  // over (on 最後の糸 the 終幕 is struck out). A 終幕 that is played also starts the count over. The boss falls only on a
+  // turn with 三本断ち: until then its HP stops at 1 (hung by its strings).
+  // A cell is read on the act it belongs to (ph); a new act starts its script from its first cell (phaseAt).
+  const kuriteScript = (P, step, c) => {
+    const R = (i) => (i + c) % 3;
+    const T = (...pairs) => pairs.map(([reel, s]) => ({ reel: R(reel), s }));
+    if (P === 1) {
+      return [
+        { k: 'attack', v: 18, label: '糸引き', threads: T([0, 'skull']) },
+        { k: 'attack', v: 12, steal: 1, label: '手繰り', threads: T([1, 'lantern']) },
+        { k: 'charge', label: '吊り上げ', next: 42, nextLabel: '落とし', threads: T([2, 'heart']) },
+        { k: 'attack', v: 42, heavy: true, label: '落とし' },
+      ][step];
+    }
+    if (P === 2) {
+      return [
+        { k: 'attack', v: 20, label: '二重引き', threads: T([0, 'skull'], [1, 'lantern']) },
+        { k: 'attack', v: 16, label: '面打ち', threads: T([1, 'skull'], [2, 'lantern']) },
+        { k: 'charge', label: '吊り上げ', next: 48, nextLabel: '落とし', threads: T([2, 'heart'], [0, 'lantern']) },
+        { k: 'attack', v: 48, heavy: true, label: '落とし' },
+      ][step];
+    }
+    return [
+      { k: 'attack', v: 16, label: '秒読み・三', countdown: 3, threads: T([0, 'skull'], [1, 'lantern']) },
+      { k: 'attack', v: 16, label: '秒読み・二', countdown: 2, threads: T([1, 'skull'], [2, 'lantern']) },
+      { k: 'charge', label: '最後の糸', next: 60, nextLabel: '終幕', threadOnly: true, countdown: 1, threads: T([2, 'skull'], [0, 'lantern']) },
+      { k: 'attack', v: 60, heavy: true, label: '終幕', finale: true },
+    ][step];
+  };
+  Object.assign(ENEMIES, {
+    kurite: {
+      name: '深淵の繰り手', hp: 1600, armor: 0, ember: 0, zone: 'deepest', boss: true, final: true, mirror: true, phases: [0.6, 0.3],
+      tip: '金の糸のリールは、繰り手の書いた目になる。自分の手で動かせば糸は断てる（再演では断てない）。',
+      ai(e, run) {
+        const P = e.phase || 1;
+        if (e.phaseFor !== P) { e.phaseFor = P; e.phaseAt = e.cursor || 0; }
+        const k = (e.cursor || 0) - e.phaseAt;
+        const it = Object.assign({ ph: P }, kuriteScript(P, k % 4, Math.floor(k / 4)));
+        if (P === 2) it.now = { k: 'mark', sym: e.mirrorSym || run.mostStocked() };
+        return it;
+      },
+    },
+  });
+
   // ---------------------------------------------------------------- relics (run only)
   const RELICS = {
     whetstone:  { name: '砥石',       glyph: '砥', desc: '剣の基礎ダメージ+2' },
@@ -402,6 +459,6 @@
 
   SD.Data = {
     SYMBOLS, WILD_PRIORITY, BOND_ORDER, MATCH_MULT, START_STRIPS, STRIP_MIN, STRIP_MAX, BASE_HP,
-    HEROES, ZONES, FLOORS, LAST_FLOOR, DEEP_FIRST_FLOOR, DEEP_LAST_FLOOR, DEEP_PAIR, SHORTCUTS, ENEMIES, RELICS, EVENTS, SKILLS, SKILL_BY_ID,
+    HEROES, ZONES, FLOORS, LAST_FLOOR, DEEP_FIRST_FLOOR, DEEP_LAST_FLOOR, DEEP_PAIR, FINAL_FLOOR, THREADS, SHORTCUTS, ENEMIES, RELICS, EVENTS, SKILLS, SKILL_BY_ID,
   };
 })();

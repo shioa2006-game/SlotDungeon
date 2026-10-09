@@ -215,7 +215,9 @@
           Art.drawSymbol(ctx, cellObj.s, cx, y, SYM, opts);
         }
         if (onLine && r.echo && !d.anim) {
-          ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'rgba(197,139,255,0.22)';
+          // 写し身 / 祝福: violet. 糸 (深淵の繰り手): gold — the puppeteer wrote this cell
+          const strung = r.echo.thread === i;
+          ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = strung ? 'rgba(255,200,80,0.20)' : 'rgba(197,139,255,0.22)';
           ctx.fillRect(R.x, L.paylineY, R.w, L.paylineH); ctx.restore();
         }
         // wild shows what it became
@@ -272,6 +274,28 @@
           ctx.save(); ctx.strokeStyle = 'rgba(232,191,106,0.95)'; ctx.lineWidth = 3;
           SD.Art.roundRectPath(ctx, R.x + 4, L.paylineY + 3, R.w - 8, L.paylineH - 6, 10); ctx.stroke(); ctx.restore();
         }
+      }
+      // 糸: a strung reel hangs from a golden string; a string cut this turn shows its snapped ends
+      if (run.isStrung && run.isStrung(i)) {
+        const sx = R.x + R.w / 2 + 34, top = R.y + 2, bot = L.paylineY + 6, pulse = 0.6 + 0.4 * Math.sin(t * 3 + i);
+        ctx.save(); ctx.lineCap = 'round';
+        SD.Art.glow(ctx, sx, (top + bot) / 2, 40, 'rgba(255,210,87,0.45)', pulse * 0.6);
+        ctx.strokeStyle = 'rgba(255,210,87,0.35)'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(sx, top); ctx.lineTo(sx, bot); ctx.stroke();
+        ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1.8; ctx.stroke();
+        ctx.beginPath(); ctx.arc(sx, bot + 2, 4, 0, Math.PI * 2); ctx.fillStyle = '#ffd257'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#1a1222'; ctx.stroke();
+        // tag: "糸" on the payline cell
+        const bx = R.x + 20, by = L.paylineY + 16;
+        SD.Art.roundRectPath(ctx, bx - 13, by - 10, 26, 20, 6); ctx.fillStyle = 'rgba(48,34,10,0.95)'; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffd257'; ctx.stroke();
+        ctx.font = `900 13px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffe1a0'; ctx.fillText('糸', bx, by + 1);
+        ctx.restore();
+      } else if (run.wasCut && run.wasCut(i)) {
+        const sx = R.x + R.w / 2 + 34, top = R.y + 2;
+        ctx.save(); ctx.lineCap = 'round'; ctx.strokeStyle = 'rgba(255,210,87,0.75)'; ctx.lineWidth = 1.8;
+        ctx.beginPath(); ctx.moveTo(sx, top); ctx.lineTo(sx, top + 30); ctx.lineTo(sx - 4, top + 36); ctx.moveTo(sx, top + 30); ctx.lineTo(sx + 3, top + 37); ctx.stroke();
+        ctx.font = `700 11px ${SD.Game.fontUI}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+        ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText('断った', sx + 6, top + 20); ctx.fillStyle = '#ffe1a0'; ctx.fillText('断った', sx + 6, top + 20);
+        ctx.restore();
       }
       // held label
       if (run.reels[i].held) {

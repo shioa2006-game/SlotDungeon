@@ -121,6 +121,13 @@
       ctx.beginPath(); ctx.rect(0, 0, 1280, 446); ctx.clip();
       if (Art.drawBackground) {
         Art.drawBackground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth });
+        if (this.zone === 'deepest') { // 最深の間 (stage 4b stand-in)
+          ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.6; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
+          ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.42; ctx.fillStyle = '#1a0a24'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
+          ctx.save(); ctx.globalAlpha = 0.14; ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1;
+          for (let k = 0; k < 18; k++) { const x = 80 + k * 66 + Math.sin(k * 7.3) * 20; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + Math.sin(this.time * 0.4 + k) * 6, 446); ctx.stroke(); }
+          ctx.restore();
+        }
         if (this.zone === 'ashdeep') { // 灰の底: the same ruins, drained to ash
           ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.75; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
           ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.18; ctx.fillStyle = '#1a1820'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
@@ -149,11 +156,19 @@
       if (this.enemy && V && V.enemy && st.showEnemyBar) {
         const e = this.enemy, info = e.info();
         // the boss's bar hangs at the top centre: its name (above the bar) keeps clear of the DOM HUD too (QA-001)
-        if (V.enemy.boss) drawEnemyBar(ctx, V.enemy, 640, belowHud(st.hudRects ? st.hudRects() : null, 640 - 260, 520, 104 - 26, 42) + 26, this.time, st.ghostPct);
-        else drawEnemyBar(ctx, V.enemy, e.x, 392, this.time, st.ghostPct);
+        let ist = st;
+        if (V.enemy.boss) {
+          const barY = belowHud(st.hudRects ? st.hudRects() : null, 640 - 260, 520, 104 - 26, 42) + 26;
+          drawEnemyBar(ctx, V.enemy, 640, barY, this.time, st.ghostPct);
+          // 深淵の繰り手: its plaque and band hang below the bar and the notes under it (the hang, 三本断ち n/3)
+          if (V.enemy.final) {
+            const block = { x: 640 - 264, y: barY - 24, w: 528, h: 24 + 16 + 22 + ((V.enemy.phase || 1) >= 3 ? 28 : 0) };
+            ist = Object.assign({}, st, { hudRects: () => (st.hudRects ? st.hudRects() : []).concat([block]) });
+          }
+        } else drawEnemyBar(ctx, V.enemy, e.x, 392, this.time, st.ghostPct);
         this.bandRects = [];
         if (st.intent) {
-          if (V.enemy.boss) this.bandRects = drawIntent(ctx, st.intent, e.x - 250, 214, this.time, st) || [];
+          if (V.enemy.boss) this.bandRects = drawIntent(ctx, st.intent, e.x - 250, 214, this.time, ist) || [];
           else this.bandRects = drawIntent(ctx, st.intent, e.x + (info.head ? info.head[0] : 0), e.y + (info.head ? info.head[1] : -info.height) - 18, this.time, st) || [];
         }
       } else this.bandRects = [];
@@ -232,8 +247,9 @@
     // name (under the bar so it never covers the puppet)
     ctx.save(); ctx.font = `700 15px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
     const ny = E.boss ? y - 10 : y + h + 15;
-    ctx.lineWidth = 4; ctx.strokeStyle = '#1a1222'; ctx.strokeText(E.name, cx, ny);
-    ctx.fillStyle = E.dread ? '#ff8a8a' : E.elite || E.boss ? '#ffd257' : '#efe5cf'; ctx.fillText(E.name, cx, ny); ctx.restore();
+    const nm = E.final ? `${E.name}・${['', '糸の段', '面の段', '終幕の段'][E.phase || 1] || ''}` : E.name; // (the final boss: its act)
+    ctx.lineWidth = 4; ctx.strokeStyle = '#1a1222'; ctx.strokeText(nm, cx, ny);
+    ctx.fillStyle = E.dread ? '#ff8a8a' : E.elite || E.boss ? '#ffd257' : '#efe5cf'; ctx.fillText(nm, cx, ny); ctx.restore();
     // badges right of the bar
     let bx = x + w + 20;
     const badge = (icon, val, color) => {
@@ -244,6 +260,7 @@
     if (E.block > 0) badge('block', E.block, '#dff4ff');
     if (E.armorNow > 0) badge('armor', E.armorNow, '#e6e6f0');
     if (E.burn > 0) badge('burn', E.burn, '#ffb070');
+    if (E.final) drawFinalBar(ctx, E, x, y, w, h, t);
     // seals for the boss
     if (E.boss && E.maxSeals) {
       for (let k = 0; k < E.maxSeals; k++) {
@@ -254,6 +271,65 @@
       }
     }
   }
+
+  // 深淵の繰り手: the act on the bar (60% / 30% marks), the strings cut on the countdown (三本断ち n/3), and the hang
+  function drawFinalBar(ctx, E, x, y, w, h, t) {
+    const Art = SD.Art, need = E.need || 3, phase = E.phase || 1;
+    ctx.save();
+    // act marks
+    for (const f of [0.6, 0.3]) {
+      const mx = x + w * f;
+      ctx.strokeStyle = '#1a1222'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(mx, y - 3); ctx.lineTo(mx, y + h + 3); ctx.stroke();
+      ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1.2; ctx.stroke();
+    }
+    ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+    // the hang: a knot at the bar's left end (1 HP), and what it means
+    const kx = x + 2, ky = y + h / 2;
+    Art.glow(ctx, kx, ky, 14, 'rgba(255,210,87,0.8)', 0.5 + 0.3 * Math.sin(t * 3));
+    ctx.beginPath(); ctx.arc(kx, ky, 4.5, 0, Math.PI * 2); ctx.fillStyle = '#ffd257'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#1a1222'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(kx, ky - 4); ctx.lineTo(kx, ky - 16); ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1.2; ctx.stroke();
+    const hung = E.hp <= 1 && E.hpShown <= 1.5;
+    ctx.textAlign = 'left';
+    ctx.font = `${hung ? 900 : 700} ${hung ? 13 : 11.5}px ${SD.Game.fontUI}`;
+    const note = hung ? '糸で吊られている — 三本断ちでとどめ' : 'とどめは三本断ちだけ（HPは1で止まる）';
+    ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText(note, x, y + h + 12);
+    ctx.fillStyle = hung ? (Math.sin(t * 6) > 0 ? '#ffe68a' : '#ffd257') : 'rgba(255,225,160,0.85)'; ctx.fillText(note, x, y + h + 12);
+    // 終幕の段: the strings cut on the countdown
+    if (phase >= 3) {
+      const cuts = Math.min(need, E.cuts || 0), cx0 = x + 64, cy = y + h + 32; // (left: the plaque and its hint hang at the centre)
+      ctx.font = `900 12px ${SD.Game.fontUI}`; ctx.textAlign = 'right';
+      ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText('三本断ち', cx0 - 8, cy); ctx.fillStyle = '#ffe1a0'; ctx.fillText('三本断ち', cx0 - 8, cy);
+      for (let k = 0; k < need; k++) {
+        const sx = cx0 + 10 + k * 34, cut = k < cuts;
+        Art.roundRectPath(ctx, sx - 13, cy - 11, 26, 22, 6); ctx.fillStyle = cut ? 'rgba(60,40,10,0.95)' : 'rgba(24,17,34,0.92)'; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = cut ? '#ffd257' : '#8a6a2e'; ctx.stroke();
+        ctx.lineCap = 'round'; ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 2;
+        if (cut) { // a snapped string: two frayed ends
+          ctx.beginPath(); ctx.moveTo(sx, cy - 8); ctx.lineTo(sx + 1, cy - 2); ctx.moveTo(sx - 1, cy + 3); ctx.lineTo(sx, cy + 8); ctx.stroke();
+          Art.glow(ctx, sx, cy, 12, 'rgba(255,210,87,0.7)', 0.6);
+        } else { ctx.globalAlpha = 0.45; ctx.beginPath(); ctx.moveTo(sx, cy - 8); ctx.lineTo(sx, cy + 8); ctx.stroke(); ctx.globalAlpha = 1; }
+      }
+      ctx.textAlign = 'left'; ctx.font = `800 12px ${SD.Game.fontNum}`;
+      ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText(`${cuts}/${need}`, cx0 + 10 + need * 34 - 6, cy); ctx.fillStyle = '#ffe1a0'; ctx.fillText(`${cuts}/${need}`, cx0 + 10 + need * 34 - 6, cy);
+    }
+    ctx.restore();
+  }
+
+  // the strings of a script cell: "①[髑髏] ③[灯]" chips (x0 = left, cy = centre)
+  function threadChips(ctx, threads, x0, cy, s) {
+    const Art = SD.Art;
+    let x = x0;
+    for (const th of threads) {
+      Art.roundRectPath(ctx, x, cy - s / 2 - 1, s * 1.75, s + 2, 5); ctx.fillStyle = 'rgba(48,34,10,0.96)'; ctx.fill();
+      ctx.lineWidth = 1.2; ctx.strokeStyle = '#ffd257'; ctx.stroke();
+      ctx.font = `900 ${Math.round(s * 0.62)}px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffe1a0';
+      ctx.fillText(String(th.reel + 1), x + s * 0.38, cy + 0.5);
+      if (Art.drawSymbol) Art.drawSymbol(ctx, th.s, x + s * 1.18, cy, s * 0.92, {});
+      x += s * 1.75 + 3;
+    }
+    return x - x0;
+  }
+  const chipsWidth = (n, s) => (n ? n * (s * 1.75 + 3) - 3 : 0);
 
   // a tiny brass padlock (the same motif as the reel clamp): "this cell is fixed in the script"
   function drawPadlock(ctx, x, y, s) {
@@ -351,6 +427,10 @@
         ctx.save(); ctx.strokeStyle = '#ff6a5a'; ctx.lineWidth = 3; ctx.lineCap = 'round';
         ctx.beginPath(); ctx.moveTo(x + 5, y + s - 5); ctx.lineTo(x + s - 5, y + 5); ctx.stroke(); ctx.restore();
       }
+      if (I.threads && c.role !== 'skip') {
+        ctx.save(); const cs = 12, cw = chipsWidth(I.threads.length, cs);
+        threadChips(ctx, I.threads, cx - cw / 2, y + s + 9, cs); ctx.restore();
+      }
       if (c.role === 'skip' || c.role === 'debt') {
         ctx.save(); ctx.font = `900 11px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
         const tag = c.role === 'skip' ? '不発' : '借り';
@@ -381,6 +461,7 @@
       parts.push({ x: nx - nw / 2, dy: h / 2 - 45, w: nw, h: 75 }); // its label above, the badge (48) below
     }
     if (band) parts.push({ x: x + w + 6, dy: h / 2 - 40, w: bandWidth(band) + 20 + 55, h: 80 }); // caption, cells, 不発/借り tags (+ slide)
+    if (I.threads) { const tw = chipsWidth(I.threads.length, 16) + 30; parts.push({ x: cx - tw / 2, dy: h + 4, w: tw, h: 22 }); }
     ctx.restore();
     return parts;
   }
@@ -459,6 +540,14 @@
       ctx.fillStyle = '#bff0ff'; ctx.fillText(I.hint, cx, y - 33);
     }
     ctx.restore();
+    if (I.threads) {
+      ctx.save();
+      const tw = chipsWidth(I.threads.length, 16) + 30, tx0 = cx - tw / 2, ty = y + h + 15 + bob;
+      ctx.font = `900 12px ${SD.Game.fontUI}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+      ctx.lineWidth = 3; ctx.strokeStyle = '#1a1222'; ctx.strokeText('糸', tx0, ty); ctx.fillStyle = '#ffd257'; ctx.fillText('糸', tx0, ty);
+      threadChips(ctx, I.threads, tx0 + 18, ty, 16);
+      ctx.restore();
+    }
     if (I.debt) {
       ctx.save(); ctx.font = `900 12px ${SD.Game.fontUI}`; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
       const lbl = '借りの一手';

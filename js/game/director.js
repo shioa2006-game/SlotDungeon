@@ -66,6 +66,19 @@
       }
     }
 
+    // 深淵の繰り手's strings: a golden string drops onto a reel / snaps
+    stringFx(reel, cut) {
+      const R = SD.REEL_LAYOUT.reels[reel], x = R.x + R.w / 2 + 34;
+      if (cut) {
+        SD.FX.burst(x, R.y + 20, 14, { color: ['#ffd257', '#fff6d8'], speed: 220, gravity: 160 });
+        SD.FX.text(x, R.y - 6, '糸を断った', { color: '#ffe1a0', size: 20, vy: -26 });
+        this.sfx('unlock', { pitch: 1.4, vol: 0.7 });
+      } else {
+        SD.FX.stream(x, 40, x, R.y + 60, 6, { color: '#ffd257', stagger: 0.015 });
+      }
+    }
+    isFinal() { const e = this.rs.run.enemy; return !!(e && SD.Data.ENEMIES[e.id] && SD.Data.ENEMIES[e.id].final); }
+
     // ---------------------------------------------------------------- run / room flow
     async on_runStart() { this.rs.scene.curtainTarget = 0; await this.wait(0.2); }
     async on_shortcut(ev) {
@@ -118,7 +131,7 @@
         if (SD.Audio) { SD.Audio.setMusic('boss'); SD.Audio.play('boss_appear'); SD.Audio.duck(0.6, 2); }
         SD.FX.shake(6);
         for (let k = 0; k <= 20; k++) { a.alpha = k / 20; await this.wait(0.05); }
-        SD.FX.banner(ev.enemy.name, { sub: '封印を三連か絆で砕け。封じたままでは灰輪が加速する', size: 60, color: '#e8d0ff', glow: 'rgba(150,90,255,0.6)', life: 2.2, y: 300 });
+        SD.FX.banner(ev.enemy.name, { sub: ev.enemy.final ? '糸の張られたリールは、自分の手で動かせば断てる。とどめは三本断ちだけ' : '封印を三連か絆で砕け。封じたままでは灰輪が加速する', size: 60, color: '#e8d0ff', glow: 'rgba(150,90,255,0.6)', life: 2.2, y: 300 });
         await this.wait(1.4);
         rs.scene.bossDark = 0;
       } else {
@@ -188,6 +201,13 @@
       if (antic >= 0) setTimeout(() => this.sfx('anticipation'), 260);
       await rs.reels.spin(ev.stops, ev.spun, { anticipation: antic, speedMul: ev.chain ? 0.7 : 1 });
       rs.reels.lever.target = 0;
+      if (ev.threads && ev.threads.length) {
+        for (const th of ev.threads) this.stringFx(th.reel, false);
+        this.sfx('hold', { pitch: 0.7 });
+        const e = rs.scene.enemy; if (e) e.play('cast', 0.4);
+        await this.wait(0.25);
+        rs.firstThreads();
+      }
     }
 
     async on_respin(ev) {
@@ -207,7 +227,10 @@
       this.sfx(ev.held ? 'hold' : 'unhold');
       if (ev.held) this.heroAt('knight').play('manip', 0.35);
     }
-    async on_deny() { this.sfx('ui_deny'); }
+    async on_deny(ev) {
+      this.sfx('ui_deny');
+      if (ev && ev.reason === 'thread') { const R = SD.REEL_LAYOUT.reels[ev.reel]; SD.FX.text(R.x + R.w / 2, R.y + 60, '糸のリールは留められない', { color: '#ffe1a0', size: 18, vy: -20 }); }
+    }
 
     async on_nudge(ev) {
       const rs = this.rs;
@@ -218,6 +241,7 @@
       const pf = this.heroFx('priest'), p = SD.REEL_LAYOUT.reels[ev.reel];
       SD.FX.stream(pf.x, pf.y, p.x + p.w / 2, ev.dir < 0 ? p.y + 30 : p.y + p.h - 30, 4, { color: '#7df0b4', stagger: 0.02 });
       await rs.reels.nudge(ev.reel, ev.dir, Math.abs(ev.dir) > 1 ? 0.3 : 0.2);
+      if (ev.cut) this.stringFx(ev.reel, true);
       if (ev.awaken) rs.onAwakenUsed();
     }
 
@@ -227,6 +251,7 @@
       const c = this.rs.reels.cellCenter(ev.reel, 0);
       SD.FX.burst(c.x, c.y, 18, { color: ['#7df0b4', '#ffffff'], kind: 'mote', speed: 140, gravity: 0 });
       SD.FX.text(c.x, c.y - 40, '祝福', { color: '#7df0b4', size: 24 });
+      if (ev.cut) this.stringFx(ev.reel, true);
       await this.wait(0.35);
     }
 
@@ -238,6 +263,7 @@
       SD.FX.stream(a.x, a.y, b.x, b.y, 10, { color: '#c58bff', stagger: 0.015 });
       await this.wait(0.45);
       SD.FX.burst(b.x, b.y, 16, { color: ['#c58bff', '#ffffff'], speed: 200 });
+      if (ev.cut) this.stringFx(ev.reel, true);
     }
 
     async on_fateKey(ev) {
@@ -248,6 +274,7 @@
       await rs.reels.spin(rs.run.reels.map((r) => r.pos), rs.run.reels.map((_, i) => i === ev.reel), { respin: true });
       const c = rs.reels.cellCenter(ev.reel, 0);
       SD.FX.ring(c.x, c.y, { color: '#ffd257', r1: 90 });
+      if (ev.cut) this.stringFx(ev.reel, true);
     }
 
     // 拍子木: the clappers strike, the Ashwheel's script slides one cell toward the party
@@ -368,6 +395,7 @@
 
     async on_stagger(ev) {
       const p = this.enemyFx();
+      if (ev && ev.by === 'threads') { if (this.rs.scene.enemy) { this.rs.scene.enemy.setHold(null); this.rs.scene.enemy.play('hit', 0.5); } return; }
       if (ev && ev.by === 'break') {
         // 灰鐘の番人: the shell broke under the hits, and with it the 構え
         SD.FX.burst(p.x, p.y - 50, 26, { color: ['#a89c9e', '#ff7a3a', '#fff6d8'], kind: 'chunk', speed: 320 });
@@ -438,6 +466,41 @@
         this.dmgEnemy(ev.hp, ev.dmg, { color: '#e2c8ff', sub: '髑髏の契約' });
         await this.wait(0.15);
       }
+    }
+
+    async on_threads(ev) {
+      const V = this.V(), FX = SD.FX;
+      if (ev.count != null && V.enemy) V.enemy.cuts = ev.count;
+      if (ev.three) {
+        FX.stop(140); FX.shake(10);
+        FX.flash('rgba(255,214,120,1)', 0.45, 2.2);
+        for (let i = 0; i < 3; i++) { const R = SD.REEL_LAYOUT.reels[i]; FX.burst(R.x + R.w / 2 + 34, R.y + 20, 18, { color: ['#ffd257', '#fff6d8'], speed: 300 }); }
+        const it = this.rs.run.enemy && this.rs.run.enemy.intent;
+        FX.banner('三本断ち', { sub: ev.hp <= 0 ? '最後の糸が断たれた' : it && it.k === 'charge' ? `繰り手は怯んだ。${it.nextLabel || '終幕'}は消える` : '繰り手は怯んだ。秒読みは3に戻る', size: 70, color: '#ffe1a0', glow: 'rgba(255,200,90,0.7)', life: 1.6 });
+        this.sfx('seal_break'); this.sfx('combo_bond', { vol: 0.7 });
+        for (const h of this.rs.scene.heroList()) h.play('cheer', 0.7);
+        await this.wait(0.7);
+      }
+      if (ev.dmg > 0) {
+        this.dmgEnemy(ev.hp, ev.dmg, { big: !!ev.three, color: '#ffd257', sub: ev.three ? '三本断ち' : `糸の反動 ×${ev.cut}`, parts: ['#ffd257', '#fff6d8'] });
+        this.sfx(ev.three ? 'enemy_hit_big' : 'enemy_hit');
+        await this.wait(0.3);
+      } else if (ev.count != null && ev.cut > 0) {
+        const p = this.enemyFx(); FX.text(p.x, p.y - 120, `三本断ち ${ev.count}/${ev.need}`, { color: '#ffe1a0', size: 22, vy: -20 });
+      }
+      if (ev.reset && V.enemy) V.enemy.cuts = 0;
+    }
+    async on_hung(ev) {
+      const V = this.V(), p = this.enemyFx(), f = this.rs.run.fight;
+      if (V.enemy) V.enemy.hp = ev.hp;
+      // once a turn is enough (the line, then burn or thorns on its own turn, may all stop at 1 HP)
+      const turn = f ? f.turn : -1;
+      if (this._hungTurn === turn) return;
+      this._hungTurn = turn;
+      SD.FX.text(p.x, p.y - 150, '糸で吊られている', { color: '#ffe68a', size: 30, vy: -14, sub: '三本断ちでしか倒れない', life: 1.6 });
+      this.sfx('hold', { pitch: 0.6 });
+      const e = this.rs.scene.enemy; if (e) e.play('hit', 0.6);
+      await this.wait(0.55);
     }
 
     async on_reaper(ev) {
@@ -647,7 +710,7 @@
     async on_staggerCancel(ev) {
       const p = this.enemyFx();
       const brk = SD.UI.breaksStance(this.rs.run);
-      SD.FX.text(p.x, p.y - 90, brk ? `${(ev && ev.skipped && ev.skipped.label) || '大鐘'}は崩れた` : '強撃は不発', { color: '#9fe8ff', size: 28, sub: SD.UI.bandVisible(this.rs.run) ? '台本から消えた' : null });
+      SD.FX.text(p.x, p.y - 90, this.isFinal() ? `${(ev && ev.skipped && ev.skipped.label) || '強撃'}は消えた` : brk ? `${(ev && ev.skipped && ev.skipped.label) || '大鐘'}は崩れた` : '強撃は不発', { color: '#9fe8ff', size: 28, sub: SD.UI.bandVisible(this.rs.run) ? '台本から消えた' : null });
       if (SD.UI.bandVisible(this.rs.run)) this.rs.bandSlide = 1;
       await this.wait(0.35);
     }
@@ -660,7 +723,8 @@
       this.V().enemy.phase = ev.phase;
       this.sfx('boss_phase');
       SD.FX.shake(10); SD.FX.flash('rgba(160,80,255,1)', 0.4, 1.5, false);
-      SD.FX.banner(ev.phase === 2 ? '逆廻り' : '破滅の秒読み', { sub: ev.phase === 2 ? '封じが巡る。外して殴れ' : '灰燼が来る。盾で受けるか、削り切れ', size: 60, color: '#e8d0ff', glow: 'rgba(150,80,255,0.6)', life: 1.6 });
+      if (this.isFinal()) SD.FX.banner(ev.phase === 2 ? '面の段' : '終幕の段', { sub: ev.phase === 2 ? '糸は2本に。面が、前に主役だった記号を封じる' : `秒読みの間に糸を合わせて${SD.Data.THREADS.need}本断て。とどめは三本断ちだけ`, size: 60, color: '#e8d0ff', glow: 'rgba(150,80,255,0.6)', life: 1.8 });
+      else SD.FX.banner(ev.phase === 2 ? '逆廻り' : '破滅の秒読み', { sub: ev.phase === 2 ? '封じが巡る。外して殴れ' : '灰燼が来る。盾で受けるか、削り切れ', size: 60, color: '#e8d0ff', glow: 'rgba(150,80,255,0.6)', life: 1.6 });
       if (ev.gained) { this.V().sparks = ev.sparks; rs.reels.flareCandle(ev.sparks - 1); this.sfx('spark_gain'); }
       await this.wait(1.1);
     }
@@ -711,7 +775,8 @@
       if (SD.Audio) SD.Audio.setMusic('victory');
       SD.FX.flash('rgba(255,240,200,1)', 0.8, 0.8);
       for (const h of rs.scene.heroList()) h.play('cheer', 1.2);
-      SD.FX.banner('灰輪の主を討った', { sub: '灯輪は、再び正しく廻り始める', size: 56, life: 3 });
+      const fin = this.rs.run.killer == null && this.rs.run.floor === SD.Data.FINAL_FLOOR;
+      SD.FX.banner(fin ? '深淵の繰り手を討った' : '灰輪の主を討った', { sub: fin ? '糸は断たれた。運命は、三人の手に' : '灯輪は、再び正しく廻り始める', size: 56, life: 3 });
       for (let k = 0; k < 6; k++) { SD.FX.burst(200 + k * 180, 200, 30, { color: ['#ffd257', '#fff6d8', '#ff9a3c'], kind: 'star', speed: 380 }); await this.wait(0.3); }
       await this.wait(1.2);
     }

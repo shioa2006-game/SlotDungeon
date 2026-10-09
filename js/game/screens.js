@@ -352,13 +352,18 @@ const TREE_SX = 1.12;
   // RUN
   // =====================================================================================
   class RunScreen {
-    constructor(opts = {}) { this.startFloor = opts.startFloor || 1; }
+    // opts.kit { carvings, relics }: picked at the start, before the first door (the stage 4b test entrance to B17 uses it)
+    constructor(opts = {}) { this.startFloor = opts.startFloor || 1; this.kit = opts.kit || null; this.act = opts.act || 1; }
 
     enter() {
       const G = SD.Game;
       this.profile = G.profile;
       this.mods = SD.Meta.computeMods(this.profile);
       this.run = new SD.Run(this.mods, { startFloor: this.startFloor });
+      if (this.kit) {
+        for (let i = 0; i < (this.kit.carvings || 0); i++) this.run.pending.push('carving');
+        for (let i = 0; i < (this.kit.relics || 0); i++) this.run.pending.push('relic');
+      }
       this.scene = new SD.Scene();
       this.reels = new SD.ReelView();
       this.reels.sync(this.run);
@@ -391,7 +396,50 @@ const TREE_SX = 1.12;
         SD.Game.save();
         setTimeout(() => { SD.FX.banner(fresh.map((n) => n.name).join('・'), { sub: '新たな灯紋が灯っている', size: 50, y: 170, life: 2.0 }); if (SD.Audio) SD.Audio.play('relic'); }, 2100);
       }
-      this.play(this.run.begin());
+      let ev = this.run.begin();
+      if (this.kit && this.kit.auto) ev = this.autoKit(ev);
+      if (this.act > 1) this.startAtAct(ev, this.act);
+      this.play(ev);
+    }
+
+    // (test entrance) pick the kit without the crossroads screens, as the sim's bot would; returns the events that enter the fight
+    autoKit(ev) {
+      const run = this.run;
+      const score = (o) => {
+        switch (o.kind) {
+          case 'relic': return 5;
+          case 'add2': return 4.5;
+          case 'gild': return 4;
+          case 'add': return { blade: 3, flame: 2.6, ward: 2, heart: 2, lantern: 0.5, wild: 6, skull: run.mods.skullPact ? 2 : -5 }[o.sym] || 0;
+          case 'transmute': return o.from === 'lantern' || o.from === 'skull' ? 3 : 0.5;
+          case 'remove': return o.sym === 'skull' ? 5 : o.sym === 'lantern' ? 1.5 : 0.2;
+          case 'spark': return 3;
+          default: return -1; // (鑿 and the rest)
+        }
+      };
+      let out = ev;
+      for (let guard = 0; guard < 80 && run.phase !== 'idle' && run.phase !== 'dead'; guard++) {
+        if (run.phase === 'chisel') out = run.finishChisel();
+        else if (run.phase === 'crossroads') {
+          let bi = null, bs = -1e9;
+          (run.offers || []).forEach((o, i) => { const s = score(o); if (s > bs) { bs = s; bi = i; } });
+          out = run.choose(bi, 0);
+        } else if (run.phase === 'event') out = run.chooseEvent(run.event.options[0].id);
+        else break;
+      }
+      this.updateRelics();
+      this.V.hp = this.V.hpShown = this.V.hpGhost = run.hp; this.V.maxHp = run.maxHp; this.V.sparks = run.sparks;
+      return out;
+    }
+    // (test entrance) start the final boss at 面の段 (HP 60%) or 終幕の段 (HP 30%), its script at that act's first cell
+    startAtAct(ev, act) {
+      const run = this.run, e = run.enemy;
+      if (!e || !SD.UI.isFinal(run)) return;
+      const PH = SD.Data.ENEMIES[e.id].phases;
+      e.hp = Math.floor(e.maxHp * PH[act - 2]); e.phase = act; e.phaseFor = act; e.phaseAt = e.cursor || 0; e.cutCount = 0;
+      e.intent = run._readCell(e); e.now = e.intent.now || null;
+      const c = ev.find((x) => x.t === 'combat');
+      if (c) { c.enemy = run._enemySnap(); c.intent = e.intent; }
     }
 
     exit() { SD.UI.hideTip(); this.closePicker(); }
@@ -461,7 +509,7 @@ const TREE_SX = 1.12;
       const Z = SD.Data.ZONES[SD.Data.FLOORS[f] ? SD.Data.FLOORS[f].zone : 'abyss'];
       this.dom.floor.innerHTML = `<span class="b">B${f}</span><span class="z">${Z.name}</span>`;
       let html = '';
-      const lastBead = run.deep || run.floor > SD.Data.LAST_FLOOR ? SD.Data.DEEP_LAST_FLOOR : SD.Data.LAST_FLOOR;
+      const lastBead = Math.max(run.floor, run.startFloor) >= SD.Data.FINAL_FLOOR ? SD.Data.FINAL_FLOOR : run.deep || run.floor > SD.Data.LAST_FLOOR ? SD.Data.DEEP_LAST_FLOOR : SD.Data.LAST_FLOOR;
       for (let k = 1; k <= lastBead; k++) {
         const fl = SD.Data.FLOORS[k];
         const cls = ['bead', fl.type];
@@ -537,6 +585,7 @@ const TREE_SX = 1.12;
         boss: snap.boss, elite: snap.elite, dread: snap.dread, phase: snap.phase, armor: snap.armor, armorNow: snap.armor,
         hpShown: keep && prev ? prev.hpShown : snap.hp, hpGhost: keep && prev ? prev.hpGhost : snap.hp,
       };
+      if (snap.final) Object.assign(ev, { final: true, cuts: snap.cuts || 0, need: snap.need });
       return ev;
     }
 
@@ -588,6 +637,13 @@ const TREE_SX = 1.12;
         this.hoverPrev = { R: null, turn: P.turn, band: P.band, caption: '借りると…' };
         this.renderLeft(run.forecast(), '借りると…', P.turn);
       }
+    }
+
+    // the first time strings hang on the reels: what they are and how to cut them (once)
+    firstThreads() {
+      if (this.profile.seen.threads) return;
+      this.profile.seen.threads = true; SD.Game.save();
+      this.showHint('<b>糸</b>：金の糸のリールは、繰り手が書いた目になっている。<br><b>自分の手で動かすと糸が切れる</b>（ずらし・遠押し・運命の鍵・写し身・祝福）。再演では断てない。', 640, 470, 8);
     }
 
     lowHpMood() {
@@ -830,6 +886,11 @@ const TREE_SX = 1.12;
             }
           }
         }
+        if (SD.UI.isFinal(run) && e) {
+          const TR = SD.Data.THREADS;
+          const hang = e.hp <= 1 ? '<b class="hung">糸で吊られている</b>：三本断ちでとどめ' : 'とどめは三本断ちだけ（HP は 1 で止まる）';
+          el.appendChild(U.el('div', 'tip2 fc-thread', e.phase >= 3 ? `三本断ち <b>${e.cutCount || 0}/${TR.need}</b>・${hang}` : hang));
+        }
         if (this.state === 'idle') el.appendChild(U.el('div', 'cta', 'レバーを引いて運命を回す <kbd>Space</kbd>'));
         return;
       }
@@ -866,18 +927,34 @@ const TREE_SX = 1.12;
         el.appendChild(U.el('div', 'fc-combo', R.combos.map((c) => names[c.k] + (c.s ? '・' + SD.Data.SYMBOLS[c.s].name : '')).join(' ＋ ')));
       }
       if (R.multNotes.length) el.appendChild(U.el('div', 'fc-mult', R.multNotes.join(' ')));
+      // 糸 (深淵の繰り手): what this line does to the strings, and to the countdown's count
+      if (R.threads && e) {
+        const TR = SD.Data.THREADS, it0 = e.intent || {};
+        el.appendChild(U.el('div', 'fc-in fc-thread', R.threadCuts ? `糸 <b>${R.threadCuts}</b>／${R.threads}本を断つ → 反動 <b>${R.threadCuts * TR.backlash}</b>` : `糸 ${R.threads}本を受け入れる（断たない）`));
+        if (it0.countdown) el.appendChild(U.el('div', 'fc-in fc-thread', R.threeCut
+          ? `<b class="three">三本断ち</b> +${TR.threeCut}・${it0.k === 'charge' ? (it0.nextLabel || '終幕') + 'は消える' : '行動を失い、秒読みは3に戻る'}`
+          : `三本断ち <b>${R.cutCount}</b>/${TR.need}（あと${TR.need - R.cutCount}本）`));
+      }
       // outcome
       if (e) {
         // the enemy's HP right after this 発動: exact from the turn preview when it is knowable (a 連鎖 spin is not),
         // else from the forecast (QA-003: the turn preview also knows the shell vs 死神 / 起爆, which go round it)
         const exact = T && !T.random && T.strikeHp != null;
-        const after = exact ? T.strikeHp : Math.max(0, e.hp - Math.max(0, R.totalDmg - (e.block || 0)));
+        // 深淵の繰り手 hangs by its strings: without 三本断ち this line leaves it at 1 HP at least
+        const hangs = run.hangSaves(R);
+        let after = exact ? T.strikeHp : Math.max(0, e.hp - Math.max(0, R.totalDmg - (e.block || 0)));
+        if (hangs) after = Math.max(1, after);
         const out = U.el('div', 'fc-out');
-        out.innerHTML = after <= 0 ? '<b class="kill">撃破できる！</b>' : `敵HP <b>${e.hp}</b> → <b>${after}</b> <small class="when">発動後</small>`;
+        out.innerHTML = after <= 0 ? (SD.UI.isFinal(run) ? '<b class="kill">三本断ちでとどめ！</b>' : '<b class="kill">撃破できる！</b>') : `敵HP <b>${e.hp}</b> → <b>${after}</b> <small class="when">発動後</small>`;
         if (R.sealBreaks) out.innerHTML += ` <span class="seal">封印-${R.sealBreaks}</span>`;
         if (e.block > 0 && R.directDmg > 0 && after > 0) out.innerHTML += ` <span class="seal">殻${e.block}が先に受ける</span>`;
-        U.bindTip(out, '<b>敵HPの予測</b><br><b>発動後</b>：このターンの剣・焔・髑髏・死神・起爆を受けた直後のHP。<br>そのあと敵の番に、<b>燃焼 → 敵の行動</b>（攻撃・回復・殻）の順で進む。変わるときは下の行に出る。');
+        U.bindTip(out, '<b>敵HPの予測</b><br><b>発動後</b>：このターンの剣・焔・髑髏・死神・起爆を受けた直後のHP。<br>そのあと敵の番に、<b>燃焼 → 敵の行動</b>（攻撃・回復・殻）の順で進む。変わるときは下の行に出る。' +
+          (SD.UI.isFinal(run) ? '<br><b>深淵の繰り手</b>：' + SD.UI.FINAL_RULES.join('。<br>') : ''));
         el.appendChild(out);
+        if (hangs && after === 1 && R.totalDmg >= e.hp) {
+          const left = e.intent && e.intent.countdown ? `（あと${SD.Data.THREADS.need - R.cutCount}本）` : e.phase < 3 ? '（終幕の段の秒読みで）' : '';
+          el.appendChild(U.el('div', 'fc-in fc-thread', `<b class="hung">倒しきれない</b>：糸で吊られていて HP 1 で止まる。とどめは三本断ちだけ${left}`));
+        }
         // what the enemy's own turn then does to that number (only when it changes it)
         if (exact && after > 0) {
           const why = [];
@@ -886,13 +963,15 @@ const TREE_SX = 1.12;
           if (T.thornsBack) why.push(`棘 −${T.thornsBack}`);
           if (T.diesBy === 'burn') el.appendChild(U.el('div', 'fc-in fc-after', '敵の番の初めに、<b class="kill">燃焼で倒れる</b>'));
           else if (T.diesBy) el.appendChild(U.el('div', 'fc-in fc-after', `敵の番に<b class="kill">倒れる</b>（${why.join('・') || '返したダメージ'}）`));
-          else if (T.enemyAfter && T.enemyAfter.hp !== after) el.appendChild(U.el('div', 'fc-in fc-after', `敵の番の後 <b>${T.enemyAfter.hp}</b>（${why.join('・')}）`));
+          else if (T.enemyAfter && T.enemyAfter.hp !== after) el.appendChild(U.el('div', 'fc-in fc-after', `敵の番の後 <b>${T.enemyAfter.hp}</b>（${why.join('・')}）${hangs && T.enemyAfter.hp === 1 ? ' <b class="hung">糸で吊られて 1 で止まる</b>' : ''}`));
         }
         // 灰鐘の番人's 構え: does this line break the shell (and the stance)?
         const brk = SD.UI.breaksStance(run) && e.intent && e.intent.k === 'charge' && after > 0;
         if (brk && R.staggerBreak) el.appendChild(U.el('div', 'fc-in', `<b class="safe">殻${e.block ? e.block + 'を' : 'なし。直撃で'}割り切る → 構えが崩れ、${e.intent.nextLabel || '強撃'}は台本から消える</b>`));
         else if (brk && !R.staggerWard) el.appendChild(U.el('div', 'fc-in', `殻をあと <b>${R.shellNeed}</b> で割り切れる（盾2つでも崩れる）`));
-        if (SD.Data.ENEMIES[e.id] && SD.Data.ENEMIES[e.id].mirror && !label && run.phase === 'spun') {
+        const nxSeal = this.band && this.band.cells.find((c) => c.role === 'next');
+        const showSeal = !SD.UI.isFinal(run) || e.phase === 2 || !!(nxSeal && nxSeal.it && nxSeal.it.now && nxSeal.it.now.k === 'mark');
+        if (SD.Data.ENEMIES[e.id] && SD.Data.ENEMIES[e.id].mirror && !label && run.phase === 'spun' && showSeal) {
           const nx = this.band && this.band.cells.find((c) => c.role === 'next');
           const sym = nx && !nx.cond && !nx.unknown && nx.it.now && nx.it.now.sym;
           el.appendChild(U.el('div', 'fc-in', sym ? `次の封じ：<b>${SD.Data.SYMBOLS[sym].name}</b>（この列で発動した場合）` : '次の封じ：？（連鎖しだいで変わる）'));
@@ -1406,6 +1485,11 @@ const TREE_SX = 1.12;
           kb.innerHTML = `<div class="k-name">${k.name}</div><div class="k-bar"><div class="k-fill" style="width:${Math.round(k.hpPct * 100)}%"></div></div><div class="k-left">残り <b>${k.hp}</b> / ${k.maxHp}</div>`;
           box.appendChild(kb);
         }
+      } else if (summary.won && summary.floor === SD.Data.FINAL_FLOOR) {
+        // 深淵の繰り手 (stage 4b stand-in: the 真のクリア record, 終の巻 and the ending come in stage 4d)
+        box.appendChild(U.el('div', 'end-title win', '深淵の繰り手を討った'));
+        box.appendChild(U.el('div', 'end-sub', '糸は断たれた。運命は、三人の手に。'));
+        box.appendChild(U.el('div', 'win-note deep', '（段階4bの仮の画面。真のクリアの記録と終の巻は段階4dで作る）'));
       } else if (summary.won) {
         box.appendChild(U.el('div', 'end-title win', '灰輪の主を討った'));
         box.appendChild(U.el('div', 'end-sub', '灯輪は再び正しく廻り始めた。けれど深淵の灯は、まだ呼んでいる。'));
@@ -1483,6 +1567,20 @@ const TREE_SX = 1.12;
       // The buttons, the same shape after every fall: [灯して再挑戦 (when the whispered node can be lit)] [灯紋の輪へ]
       // [すぐ再挑戦 (small: the same start, nothing lit)]. A 灰の底 result without that offer leads with 灰の底から再挑戦
       // (a brand-new run: nothing carried over, the B13 kit chosen again).
+      if (G.testMode) {
+        const tb = U.el('div', 'end-btns');
+        const go = (act) => () => { location.search = `?test=b17${act > 1 ? '&act=' + act : ''}${G.testOpts && G.testOpts.pick ? '&pick=1' : ''}`; };
+        const again = U.button('もう一度（同じ条件） <kbd>Space</kbd>', 'primary big', () => location.reload(), { silent: true });
+        tb.appendChild(again);
+        tb.appendChild(U.button('最初から', 'mini', go(1)));
+        tb.appendChild(U.button('面の段から', 'mini', go(2)));
+        tb.appendChild(U.button('終幕の段から', 'mini', go(3)));
+        box.appendChild(tb);
+        m.appendChild(box);
+        this.endPrimary = again;
+        this.endInputLock = performance.now() + 1000;
+        return;
+      }
       const btns = U.el('div', 'end-btns');
       const deepRetry = !!summary.deep && SD.Meta.computeMods(p).shortcuts.indexOf(13) >= 0;
       let lead = null;

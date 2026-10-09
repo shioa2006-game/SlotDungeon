@@ -16,6 +16,11 @@
  *   node tools/sim.js b16 [n]                  灰鐘の番人 (B16) per strategy and growth stage: win rate, fight length, how each 大鐘 was
  *                                              answered (hits through the shell / two wards / it landed), and what the turns looked like
  *                                              (actions per turn, decision turns, which symbol led the line, how often the same lead repeats)
+ *   node tools/sim.js b17 [n]                  深淵の繰り手 (B17) on boards from whole-tree runs that cleared B16 (entrance ①: a campfire, then B17),
+ *                                              per carving taste: win rate, fight length, the strings (cut / accepted, why accepted, 三本断ち,
+ *                                              what a respin cut), 終幕, turns with nothing that could cut a string, and how the turns differ.
+ *                                              Also: how many turns pass from the boss hanging at 1 HP to the end. Numbers by env: BACKLASH,
+ *                                              THREECUT, HP, PHASES (e.g. 0.6,0.4). (Rule variants compared in docs/EXPANSION_4A_SPEC.md §11.)
  * Bots play through the real engine (js/core). NOSCRIPT=1 keeps the bots from using 拍子木 / 借り火 even when lit. */
 'use strict';
 const path = require('path');
@@ -118,6 +123,7 @@ function bestAction(run, smart) {
   // bless
   for (let i = 0; i < run.reels.length; i++) if (run.canBless(i)) {
     const c = Object.assign({}, run.paylineCell(i), { s: 'heart' });
+    delete c.thread; // (blessing a strung skull cuts the string)
     consider(run.evaluate(cellsWith(run, i, c)).utility, { k: 'bless', i });
   }
   // echo
@@ -149,7 +155,7 @@ function bestAction(run, smart) {
       for (let k = 0; k < K; k++) {
         const cells = run.paylineCells().map((c, i) => {
           const r = run.reels[i];
-          if ((mask & (1 << i)) || r.jam) return c;
+          if ((mask & (1 << i)) || r.jam || run.isStrung(i)) return c;
           return r.strip[botRng.int(r.strip.length)];
         });
         tot += run.evaluate(cells).utility;
@@ -768,5 +774,182 @@ if (mode === 'b16') {
     console.log(`  ${strat.padEnd(8)} first B16 kill: run ${median(G.filter((g) => g.b16 != null).map((g) => g.b16))} (never ${G.filter((g) => g.b16 == null).length})  whole tree: run ${median(G.filter((g) => g.full != null).map((g) => g.full))}  B16 after the tree ${f0(pc(G.filter((g) => g.full != null), (g) => g.b16 == null || g.b16 > g.full))}%` +
       `  | first 2 runs: reached B16 ${f0(pc(E, (x) => x.deep.floor >= 16 || x.deep.cleared))}%  cleared ${f0(pc(E, (x) => x.deep.cleared))}% (n${E.length})`);
   }
+}
+if (mode === 'b17') {
+  // 深淵の繰り手 on real boards: whole-tree profile, runs from B9 (第三層から, then 灰の底) and B13 (灰の底から) in turn; every run
+  // that clears B16 goes on as entrance ① will (a campfire: rest below 75% HP, else carve; one spark for the win) into B17.
+  const n = +a1 || 60;
+  const TR = SD.Data.THREADS, KD = SD.Data.ENEMIES.kurite;
+  if (process.env.BACKLASH) TR.backlash = +process.env.BACKLASH;
+  if (process.env.THREECUT) TR.threeCut = +process.env.THREECUT;
+  if (process.env.HP) KD.hp = +process.env.HP;
+  if (process.env.PHASES) KD.phases = process.env.PHASES.split(',').map(Number);
+  const full = SD.Meta.newProfile();
+  for (const s of SD.Data.SKILLS) full.unlocked[s.id] = true;
+  Object.assign(full.stats, { runs: 40, wins: 3, deepRuns: 3, deepClears: 1, eliteKills: { bellhound: 3, abbot: 3, ashlord: 3, bellkeeper: 1 } });
+  const TASTES = {
+    default: null,
+    blade: { blade: 6, flame: 2, ward: 1.5, heart: 1.5, lantern: 0.3, wild: 6, skull: -5 },
+    flame: { flame: 6, blade: 2, ward: 1.5, heart: 1.5, lantern: 0.3, wild: 6, skull: -5 },
+    ward: { ward: 6, heart: 3, blade: 1.5, flame: 1.5, lantern: 0.3, wild: 5, skull: -5 },
+    skull: { skull: 4, blade: 3, flame: 2.6, ward: 2, heart: 2, lantern: 0.5, wild: 6 },
+  };
+  const toB17 = (run) => {
+    for (const r of run.reels) {
+      const keep = r.strip[r.pos];
+      r.strip = r.strip.filter((c) => !c.temp);
+      const np = r.strip.indexOf(keep);
+      r.pos = np >= 0 ? np : 0;
+      r.held = false; r.carried = false; r.jam = false; r.echo = null;
+    }
+    run.block = 0;
+    run._gainSparks(run.mods.sparkPerWin);
+    run.phase = 'event'; run.event = { id: 'campfire', options: [{ id: 'rest' }, { id: 'carve' }] }; run.pending = [];
+    if (run.hp < run.maxHp * 0.75) run.hp = Math.min(run.maxHp, run.hp + Math.round(run.maxHp * 0.35));
+    else { run._beginChisel(1, 'remove', 'campfire'); handleBetween(run); }
+    run.event = null; run.chisel = null; run.offers = null; run.doors = null; run.pending = [];
+    run.floor = SD.Data.FINAL_FLOOR; run.enemy = null; run.fight = null;
+    run._startCombat('kurite', {});
+  };
+  // what could cut a string right now (one action), and is anything at all possible
+  const cutters = (run) => {
+    const out = new Set();
+    for (const t of run.fight.threads) {
+      const i = t.reel;
+      if (!run.isStrung(i)) continue;
+      if ([-2, -1, 1, 2].some((d) => run.canNudge(i, d)) || run.canFateKey(i) || run.canBless(i) || [0, 1, 2].some((j) => run.canEcho(j, i))) out.add(i);
+    }
+    return out;
+  };
+  const fights = [];
+  let F = null;
+  const strungNow = (run) => [0, 1, 2].filter((i) => run.isStrung(i));
+  LOG.hook = {
+    spun(run) {
+      if (!F || run.enemy !== F.e) return;
+      const T = { ph: run.enemy.phase, threads: run.fight.threads.length, sparks: run.sparkAvail(), acts: [], respinCut: 0, three: false,
+        cell: run.enemy.intent.label, canCut: cutters(run).size > 0, borrowable: run.canBorrow(), any: run._anyAction(true), strung: strungNow(run) };
+      T.dec = !run.shouldAutoResolve();
+      F.turns.push(T); F.cur = T;
+    },
+    act(run, act) {
+      const T = F && F.cur;
+      if (!T || run.enemy !== F.e) return;
+      const now = run.phase === 'spun' ? strungNow(run) : [];
+      const lost = T.strung.filter((i) => now.indexOf(i) < 0);
+      if (act.k === 'respin' && lost.length) T.respinCut += lost.length;
+      T.acts.push(act.k + (lost.length ? '!' : ''));
+      T.strung = now;
+    },
+    resolve(run, ev, e0, it0, R) {
+      const T = F && F.cur;
+      if (!T || e0 !== F.e) return;
+      const th = ev.find((x) => x.t === 'threads');
+      T.cut = th ? th.cut : 0; T.of = th ? th.of : 0; T.three = !!(th && th.three); T.threadDmg = th ? th.dmg : 0;
+      // why the uncut strings stayed: nothing could cut them (forced), or the player chose to keep them (sparks were there)
+      T.accepted = T.of - T.cut;
+      T.forced = T.accepted > 0 && !T.canCut && !T.borrowable;
+      const G = R.groups, act = Object.keys(G).filter((s) => s !== R.marked && s !== 'skull' && s !== 'wild');
+      let lead = null, ln = 0;
+      for (const s of ['blade', 'flame', 'ward', 'heart', 'lantern']) if (act.indexOf(s) >= 0 && G[s].n > ln) { ln = G[s].n; lead = s; }
+      if (!lead && G.skull) lead = R.reaper ? 'reaper' : 'skull';
+      T.lead = lead || 'none';
+      T.combo = R.combos.map((c) => c.k).join('+') || '-';
+      T.dmg = R.totalDmg;
+      T.heavyIn = it0 && it0.k === 'charge' ? it0.nextLabel : null;
+      T.struck = ev.some((x) => x.t === 'staggerCancel');
+      T.killed = ev.some((x) => x.t === 'enemyDie');
+      T.hung = ev.filter((x) => x.t === 'hung').reduce((s, x) => s + (x.held || 0), 0) || (ev.some((x) => x.t === 'hung') ? 1 : 0);
+      T.bossHpAfter = e0.hp;
+      T.heavyLanded = ev.filter((x) => x.t === 'enemyAttack' && x.heavy).map((x) => ({ raw: x.raw, dmg: x.dmg, guardian: x.guardian, back: x.thorns || 0 }));
+      T.hpAfter = run.hp;
+      F.cur = null;
+    },
+  };
+  const res = [];
+  let k = 0;
+  for (const taste of (process.env.TASTES || Object.keys(TASTES).join(',')).split(',')) {
+    LOG.symPref = TASTES[taste];
+    for (let s = 0; s < n; s++, k++) {
+      const start = k % 2 ? 13 : 9;
+      F = null;
+      const { run, summary } = playRun(JSON.parse(JSON.stringify(full)), { seed: 17000 + k, startFloor: start });
+      const cleared = summary.deep && summary.deep.cleared;
+      if (!cleared) { res.push({ taste, start, reached: false }); continue; }
+      toB17(run);
+      const e = run.enemy;
+      F = { e, turns: [], cur: null };
+      const hp0 = run.hp, sp0 = run.sparks;
+      let t = 0;
+      while (run.enemy === e && run.phase === 'idle' && t < 60) { playTurn(run, true); t++; }
+      const won = e.hp <= 0;
+      res.push({ taste, start, reached: true, won, turns: t, hp0, maxHp: run.maxHp, sp0, phase: e.phase, enemyHpPct: e.hp / e.maxHp, T: F.turns,
+        relics: run.relics.slice(), stats: run.stats });
+      F = null;
+    }
+  }
+  LOG.hook = null; LOG.symPref = null;
+  const f0 = (x) => (Number.isFinite(x) ? x.toFixed(0) : '-'), f1 = (x) => (Number.isFinite(x) ? x.toFixed(1) : '-');
+  const pc = (a, f) => (a.length ? a.filter(f).length / a.length * 100 : NaN);
+  const sum = (a, f) => a.reduce((t, x) => t + f(x), 0);
+  console.log(`深淵の繰り手 (B17) — ${n} runs per taste; backlash=${TR.backlash} threeCut=${TR.threeCut} need=${TR.need} HP=${KD.hp} phases=${KD.phases}`);
+  const A = res.filter((x) => x.reached);
+  console.log(`  reached B17 ${A.length}/${res.length}  (start HP med ${median(A.map((x) => Math.round(x.hp0 / x.maxHp * 100)))}%  maxHP med ${median(A.map((x) => x.maxHp))}  sparks med ${median(A.map((x) => x.sp0))})`);
+  const row = (label, S) => {
+    if (!S.length) return;
+    const W = S.filter((x) => x.won), TT = S.flatMap((x) => x.T);
+    console.log(`  ${label.padEnd(8)} fights ${String(S.length).padStart(4)}  win ${f0(pc(S, (x) => x.won)).padStart(3)}%  turns med ${median(S.map((x) => x.turns))} (wins ${median(W.map((x) => x.turns))}, p10-p90 ${pct(W.map((x) => x.turns), 0.1)}-${pct(W.map((x) => x.turns), 0.9)})` +
+      `  lost at: act1 ${f0(pc(S.filter((x) => !x.won), (x) => x.phase === 1))}% act2 ${f0(pc(S.filter((x) => !x.won), (x) => x.phase === 2))}% act3 ${f0(pc(S.filter((x) => !x.won), (x) => x.phase === 3))}%  boss HP left on loss med ${f0(median(S.filter((x) => !x.won).map((x) => x.enemyHpPct * 100)))}%  turn-1 dmg max ${Math.max(0, ...S.map((x) => (x.T[0] && x.T[0].dmg) || 0))}`);
+  };
+  console.log('\n[1] outcome by carving taste');
+  for (const tz of [...new Set(A.map((x) => x.taste))]) row(tz, A.filter((x) => x.taste === tz));
+  row('ALL', A);
+  const TT = A.flatMap((x) => x.T.map((t) => Object.assign({ won: x.won }, t)));
+  { const W = A.filter((x) => x.won); console.log('  won fights, turns per act (median / p90): ' + [1, 2, 3].map((p) => `act${p} ${median(W.map((x) => x.T.filter((t) => t.ph === p).length))} / ${pct(W.map((x) => x.T.filter((t) => t.ph === p).length), 0.9)}`).join('  ')); }
+  console.log('\n[2] strings (all turns with strings)');
+  for (const ph of [1, 2, 3]) {
+    const S = TT.filter((t) => t.ph === ph && t.of > 0);
+    if (!S.length) continue;
+    const strings = sum(S, (t) => t.of), cuts = sum(S, (t) => t.cut), acc = sum(S, (t) => t.accepted), forced = sum(S.filter((t) => t.forced), (t) => t.accepted);
+    const byN = {};
+    for (const t of S) { const key = t.of + ':' + t.cut; byN[key] = (byN[key] || 0) + 1; }
+    console.log(`  act${ph}: turns ${S.length}  strings ${strings}  cut ${f0(cuts / strings * 100)}%  accepted ${f0(acc / strings * 100)}% (of which forced ${f0(forced / Math.max(1, acc) * 100)}%, chosen with a cut available ${f0((acc - forced) / Math.max(1, acc) * 100)}%)` +
+      `  三本断ち ${sum(S, (t) => (t.three ? 1 : 0))}  cut by a respin ${sum(S, (t) => t.respinCut)}  | strings:cuts ${Object.keys(byN).sort().map((kk) => kk + ' ' + f0(byN[kk] / S.length * 100) + '%').join('  ')}`);
+  }
+  const W = A.filter((x) => x.won);
+  console.log(`  won fights: both cut and accepted ${f0(pc(W, (x) => x.T.some((t) => t.cut > 0) && x.T.some((t) => t.accepted > 0)))}%  only cut ${f0(pc(W, (x) => !x.T.some((t) => t.accepted > 0)))}%  only accepted ${f0(pc(W, (x) => !x.T.some((t) => t.cut > 0)))}%  三本断ち at least once ${f0(pc(W, (x) => x.T.some((t) => t.three)))}%`);
+  console.log(`  respin-made 三本断ち ${TT.filter((t) => t.three && t.respinCut >= 2).length} / 三本断ち ${TT.filter((t) => t.three).length};  a respin cut 2+ strings in ${TT.filter((t) => t.respinCut >= 2).length} turns`);
+  console.log('\n[3] the countdown (act 3): 最後の糸 / 終幕');
+  const last = TT.filter((t) => t.ph === 3 && t.heavyIn && !t.killed);
+  console.log(`  最後の糸 turns (the boss lived) ${last.length}: 三本断ち ${f0(pc(last, (t) => t.three))}%  struck otherwise ${f0(pc(last, (t) => t.struck && !t.three))}%  終幕 still coming ${f0(pc(last, (t) => !t.struck))}%  (sparks at the spin: med ${median(last.map((t) => t.sparks))}, 0 sparks ${f0(pc(last, (t) => t.sparks === 0))}%)`);
+  const cd = TT.filter((t) => t.ph === 3);
+  console.log(`  act-3 turns ${cd.length}: 三本断ち on 秒読み cells ${cd.filter((t) => t.three && !t.heavyIn).length}, on 最後の糸 ${cd.filter((t) => t.three && t.heavyIn).length}, 終幕 landed ${cd.filter((t) => t.cell === '終幕').length} (act-3 turns per won fight med ${median(A.filter((x) => x.won).map((x) => x.T.filter((t) => t.ph === 3).length))})`);
+  const fin = TT.filter((t) => t.ph === 3 && t.cell === '終幕');
+  const finLanded = A.flatMap((x) => x.T).filter((t) => t.ph === 3).flatMap((t) => t.heavyLanded || []);
+  console.log(`  終幕 turns ${fin.length}: hits that landed ${finLanded.length}: reflected by 守護 ${finLanded.filter((h) => h.guardian).length}, dmg taken med ${median(finLanded.map((h) => h.dmg))}`);
+  // the hang: from the first turn that left the boss at 1 HP to the end of the fight
+  console.log('\n[3b] hanging at 1 HP (only 三本断ち fells the boss)');
+  const at1 = (x) => x.T.findIndex((t) => t.bossHpAfter === 1);
+  const reached = A.filter((x) => at1(x) >= 0), RW = reached.filter((x) => x.won), RL = reached.filter((x) => !x.won);
+  const more = (x) => x.T.length - 1 - at1(x); // turns after the one that left it at 1 HP (the last is the 三本断ち, or the fall)
+  const heldDmg = A.flatMap((x) => x.T).filter((t) => t.hung > 1).map((t) => t.hung);
+  console.log(`  fights where the boss hung at 1 HP ${reached.length}/${A.length} (${f0(pc(A, (x) => at1(x) >= 0))}%); of the wins ${f0(pc(A.filter((x) => x.won), (x) => at1(x) >= 0))}%`);
+  console.log(`  wins after hanging: turns from then to the 三本断ち med ${median(RW.map(more))} p90 ${pct(RW.map(more), 0.9)} max ${RW.length ? Math.max(...RW.map(more)) : '-'}  (1 = on the very next turn: ${f0(pc(RW, (x) => more(x) === 1))}% within 1, ${f0(pc(RW, (x) => more(x) <= 2))}% within 2)`);
+  console.log(`  losses after hanging ${RL.length} (${f0(pc(A.filter((x) => !x.won), (x) => at1(x) >= 0))}% of the losses): turns at 1 HP before the fall med ${median(RL.map(more))}`);
+  console.log(`  damage held back by the hang (per turn it happened): med ${median(heldDmg)} p90 ${pct(heldDmg, 0.9)}`);
+  console.log('\n[4] agency: turns where nothing could cut a string (forced to accept)');
+  for (const ph of [1, 2, 3]) {
+    const S = TT.filter((t) => t.ph === ph && t.of > 0);
+    if (!S.length) continue;
+    console.log(`  act${ph}: turns ${S.length}  no cut possible ${f0(pc(S, (t) => !t.canCut))}% (and no borrow ${f0(pc(S, (t) => !t.canCut && !t.borrowable))}%)  nothing at all to do ${f0(pc(S, (t) => !t.any))}%  every reel strung and nothing to do ${f0(pc(S, (t) => !t.any && t.of >= 3))}%  0 sparks at the spin ${f0(pc(S, (t) => t.sparks === 0))}%  decision turns ${f0(pc(S, (t) => t.dec))}%`);
+  }
+  console.log('\n[5] how the turns differ (all turns)');
+  const leads = {}, combos = {}, acts = {};
+  for (const t of TT) { leads[t.lead] = (leads[t.lead] || 0) + 1; for (const a of t.acts) { const kk = a.replace('!', ''); acts[kk] = (acts[kk] || 0) + 1; } }
+  console.log(`  lead: ${Object.keys(leads).sort((a, b) => leads[b] - leads[a]).map((kk) => kk + ' ' + f0(leads[kk] / TT.length * 100) + '%').join('  ')}`);
+  console.log(`  actions per turn ${f1(sum(TT, (t) => t.acts.length) / TT.length)}: ${Object.keys(acts).sort((a, b) => acts[b] - acts[a]).map((kk) => kk + ' ' + f1(acts[kk] / TT.length)).join('  ')}`);
+  const rep = A.reduce((t, x) => t + x.T.filter((u, i) => i > 0 && u.lead === x.T[i - 1].lead && u.cut === x.T[i - 1].cut).length, 0);
+  console.log(`  same lead and same number of cuts as the turn before ${f0(rep / Math.max(1, TT.length - A.length) * 100)}%;  turn kinds per fight (lead × cuts × 三本断ち) med ${median(A.map((x) => new Set(x.T.map((t) => t.lead + t.cut + t.three)).size))}`);
+  console.log(`  damage per turn med ${median(TT.map((t) => t.dmg))}; share from strings (反動 + 三本断ち) ${f0(sum(TT, (t) => t.threadDmg || 0) / Math.max(1, sum(TT, (t) => t.dmg)) * 100)}%`);
 }
 function median(a) { if (!a.length) return NaN; const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; }

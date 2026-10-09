@@ -508,7 +508,7 @@
         echoLeft: this.mods.echo ? 1 : 0, keyLeft: this.mods.fateKey ? 1 : 0, mirrorFree: this.hasRelic('mirror') ? 1 : 0,
         momentum: !!(this.mods.momentum && this.stats.kills > 0), resolves: 0, rampart: false, guardian: false,
         chainUsed: false, burnedThisTurn: false, lanternSparkThisTurn: false,
-        advanced: false, borrowed: 0, borrowUsed: false, debt: false,
+        advanced: false, borrowed: 0, borrowUsed: false, debt: false, threads: [], threadsPaid: false,
       };
       for (const r of this.reels) { r.held = false; r.carried = false; r.jam = false; r.echo = null; }
       const ev = [];
@@ -529,8 +529,10 @@
 
     _enemySnap() {
       const e = this.enemy;
-      return { id: e.id, art: e.art, variant: e.variant, name: e.name, hp: e.hp, maxHp: e.maxHp, armor: e.armor, block: e.block,
+      const snap = { id: e.id, art: e.art, variant: e.variant, name: e.name, hp: e.hp, maxHp: e.maxHp, armor: e.armor, block: e.block,
         burn: e.burn, seals: e.seals, maxSeals: e.maxSeals, phase: e.phase, dread: e.dread, elite: e.elite, boss: e.boss, doom: e.doom };
+      if (D().ENEMIES[e.id].final) Object.assign(snap, { final: true, cuts: e.cutCount || 0, need: D().THREADS.need });
+      return snap;
     }
 
     // the first cell of a fight's script (cursor 0)
@@ -606,8 +608,11 @@
       this.fight.paidRespins = 0;
       this.fight.manipulated = false;
       this.fight.advanced = false;
+      this.fight.threads = [];
+      this.fight.threadsPaid = false;
       this.stats.spins += 1;
       this.phase = 'spun';
+      this._restring(this.enemy && this.enemy.intent);
       // Run 1: "the Emberwheel awakens" — guarantee one free, guided nudge into a trine early on.
       if (!this.awaken.done) {
         if (!this.awaken.rigged && !this.awakenTargets().length && (this.stats.spins >= 6 || this.floor >= 2)) {
@@ -621,7 +626,9 @@
         this.stats.zeroTurns += 1;
         if (!this._anyAction(true)) this.stats.lockedTurns += 1;
       }
-      return [{ t: 'spin', stops: this.reels.map((r) => r.pos), spun, awaken: this.awaken.ready }];
+      const sev = { t: 'spin', stops: this.reels.map((r) => r.pos), spun, awaken: this.awaken.ready };
+      if (this.fight.threads.length) sev.threads = this.fight.threads.map((t) => Object.assign({}, t));
+      return [sev];
     }
 
     _rigNearMiss(spun) {
@@ -672,7 +679,7 @@
       if (!this.needsDecision()) return true;
       const R = this.forecast();
       const e = this.enemy;
-      if (e && R.totalDmg >= e.hp + e.block && !(e.now && e.now.k === 'reflect')) return true;
+      if (e && R.totalDmg >= e.hp + e.block && !(e.now && e.now.k === 'reflect') && !this.hangSaves(R)) return true;
       if (R.combos.some((c) => COMBO_KINDS[c.k] && c.k !== 'reaper')) {
         if (this.mods.comboPause) return false;
         // early game: a combo fires at once — unless the only thing left is a borrowed spark that would change the turn
@@ -702,6 +709,41 @@
       return 'plan';
     }
 
+    // ------------------------------------------------------------------ 糸 (深淵の繰り手, docs/EXPANSION_4A_SPEC.md §2.2)
+    // fight.threads: this turn's strings [{ reel, s }]. A strung reel's payline is an override cell { thread: reel }; your own
+    // hand on the reel replaces it, which cuts the string (a cut string stays in the list: its 反動 is paid at the resolve).
+    // 再演 / 連鎖 never spin a strung reel and it cannot be held: only your own hand on it cuts the string.
+    isStrung(i) { const r = this.reels[i]; return !!(r && r.echo && r.echo.thread === i); }
+    // a string attached on this reel earlier this turn and cut since (for the stage: a snapped string)
+    wasCut(i) { const f = this.fight; return !!(f && f.threads && f.threads.some((t) => t.reel === i) && !this.isStrung(i)); }
+    // 深淵の繰り手 hangs by its strings: a line without 三本断ち does not take its last HP
+    hangSaves(R) {
+      const e = this.enemy, ED = e && D().ENEMIES[e.id];
+      return !!(ED && ED.final && !(R && R.threeCut) && !(this.fight && this.fight.cutFree));
+    }
+    // Attach the strings of script cell `it` (at the spin, and again when 台本送り brings another cell): strings still attached
+    // and not in the new cell are released; a reel freed this turn is not strung again.
+    _restring(it) {
+      const f = this.fight;
+      if (!f || !f.threads) return;
+      const want = (it && it.threads) || [];
+      if (!want.length && !f.threads.length) return;
+      f.threads = f.threads.filter((t) => {
+        if (!this.isStrung(t.reel) || want.some((w) => w.reel === t.reel)) return true;
+        this.reels[t.reel].echo = null;
+        return false;
+      });
+      for (const w of want) {
+        const r = this.reels[w.reel];
+        if (!r) continue;
+        const old = f.threads.find((t) => t.reel === w.reel);
+        if (old && !this.isStrung(w.reel)) continue;
+        if (old) old.s = w.s; else f.threads.push({ reel: w.reel, s: w.s });
+        r.echo = cell(w.s, { echo: true, thread: w.reel });
+        r.held = false; r.carried = false;
+      }
+    }
+
     respinCost() {
       if (!this.mods.respin) return null;
       if (!this.fight.freeRespinUsed) return 'free';
@@ -713,7 +755,7 @@
 
     canRespin() {
       if (this.phase !== 'spun' || !this.respinCost()) return false;
-      return this.reels.some((r) => !r.held && !r.jam);
+      return this.reels.some((r, i) => !r.held && !r.jam && !this.isStrung(i));
     }
 
     respin() {
@@ -724,11 +766,11 @@
       else if (cost === 'spark') { paid = this._paySpark(); this.fight.paidRespins += 1; }
       else if (cost === 'hp') { this.hp -= 4; this.fight.paidRespins += 1; }
       const spun = [];
-      for (const r of this.reels) {
-        const go = !r.held && !r.jam;
+      this.reels.forEach((r, i) => {
+        const go = !r.held && !r.jam && !this.isStrung(i);
         if (go) { r.pos = this.rng.int(r.strip.length); r.echo = null; }
         spun.push(go);
-      }
+      });
       this.fight.respinsThisTurn += 1;
       this.fight.manipulated = true;
       this.stats.respins += 1;
@@ -738,6 +780,7 @@
     canHold(i) {
       const r = this.reels[i];
       if (!r || this.phase !== 'spun' || this.mods.holdMax <= 0 || r.jam) return false;
+      if (!r.held && this.isStrung(i)) return false;
       return r.held || this.heldCount() < this.mods.holdMax;
     }
 
@@ -746,6 +789,7 @@
       if (!r || this.phase !== 'spun' || this.mods.holdMax <= 0) return [];
       if (r.jam) return [{ t: 'deny', reason: 'jam', reel: i }];
       if (r.held) { r.held = false; r.carried = false; if (this.lastHeld === i) this.lastHeld = -1; return [{ t: 'hold', reel: i, held: false }]; }
+      if (this.isStrung(i)) return [{ t: 'deny', reason: 'thread', reel: i }];
       if (this.heldCount() >= this.mods.holdMax) return [{ t: 'deny', reason: 'holdMax', reel: i }];
       r.held = true;
       this.lastHeld = i;
@@ -775,12 +819,13 @@
       if (wasAwaken) { this.awaken.ready = false; this.awaken.done = true; }
       else if (cost === 'free') { if (this.fight.freeNudgeLeft > 0) this.fight.freeNudgeLeft -= 1; else this.fight.mirrorFree -= 1; }
       else cost = this._paySpark();
-      const r = this.reels[i];
+      const r = this.reels[i], cut = this.isStrung(i);
       r.pos = U().mod(r.pos + dir, r.strip.length);
       r.echo = null;
       this.stats.nudges += 1;
       this.fight.manipulated = true;
       const ev = [{ t: 'nudge', reel: i, dir, cost, sparks: this.sparks, borrowed: this.borrowedSparks(), pos: r.pos, awaken: wasAwaken }];
+      if (cut) ev[0].cut = true;
       if (this.mods.gentle) {
         const b = this.hp; this.hp = Math.min(this.maxHp, this.hp + 2);
         if (this.hp > b) ev.push({ t: 'heal', amount: this.hp - b, hp: this.hp, src: 'gentle' });
@@ -789,16 +834,16 @@
     }
 
     canBless(i) {
-      return !!(this.phase === 'spun' && this.fight.blessLeft > 0 && this.reels[i] && !this.reels[i].echo && this.paylineCell(i).s === 'skull');
+      return !!(this.phase === 'spun' && this.fight.blessLeft > 0 && this.reels[i] && (!this.reels[i].echo || this.isStrung(i)) && this.paylineCell(i).s === 'skull');
     }
     canBlessAny() { return this.reels.some((_, i) => this.canBless(i)); }
     bless(i) {
       if (!this.canBless(i)) return [];
       this.fight.blessLeft -= 1;
-      const c = this.cellAt(i, 0);
+      const cut = this.isStrung(i), c = cut ? this.reels[i].echo : this.cellAt(i, 0);
       this.reels[i].echo = cell('heart', { g: c.g, echo: true, blessed: true });
       this.fight.manipulated = true;
-      return [{ t: 'bless', reel: i }];
+      return [cut ? { t: 'bless', reel: i, cut: true } : { t: 'bless', reel: i }];
     }
 
     // Echo: copy the payline symbol of reel `src` onto reel `dst`'s payline (this turn only).
@@ -816,10 +861,12 @@
       if (!this.canEcho(src, dst)) return [];
       this.fight.echoLeft -= 1;
       const paid = this._paySpark();
-      const s = this.paylineCell(src);
+      const s = this.paylineCell(src), cut = this.isStrung(dst);
       this.reels[dst].echo = cell(s.s, { g: s.g, echo: true });
       this.fight.manipulated = true;
-      return [{ t: 'echo', reel: dst, from: src, sym: s.s, sparks: this.sparks, borrowed: this.borrowedSparks(), cost: paid }];
+      const ev = { t: 'echo', reel: dst, from: src, sym: s.s, sparks: this.sparks, borrowed: this.borrowedSparks(), cost: paid };
+      if (cut) ev.cut = true;
+      return [ev];
     }
 
     canFateKey(ri) {
@@ -832,10 +879,12 @@
       const r = this.reels[ri];
       if (ci < 0 || ci >= r.strip.length) return [];
       this.fight.keyLeft -= 1;
-      const paid = this._paySpark();
+      const paid = this._paySpark(), cut = this.isStrung(ri);
       r.pos = ci; r.echo = null;
       this.fight.manipulated = true;
-      return [{ t: 'fateKey', reel: ri, pos: ci, sym: r.strip[ci].s, sparks: this.sparks, borrowed: this.borrowedSparks(), cost: paid }];
+      const ev = { t: 'fateKey', reel: ri, pos: ci, sym: r.strip[ci].s, sparks: this.sparks, borrowed: this.borrowedSparks(), cost: paid };
+      if (cut) ev.cut = true;
+      return [ev];
     }
 
     // ------------------------------------------------------------------ 拍子木: send the Ashwheel's script one cell
@@ -861,8 +910,11 @@
       e.intent = it;
       e.now = it.now || null;
       f.advanced = true; // (not a reel manipulation: 精妙 only rewards trines you made yourself)
+      this._restring(it);
       this.stats.advances += 1;
-      return [{ t: 'scriptAdvance', from, intent: it, enemy: this._enemySnap(), cost: paid, sparks: this.sparks, borrowed: this.borrowedSparks() }];
+      const aev = { t: 'scriptAdvance', from, intent: it, enemy: this._enemySnap(), cost: paid, sparks: this.sparks, borrowed: this.borrowedSparks() };
+      if (f.threads && f.threads.length) aev.threads = f.threads.map((t) => ({ reel: t.reel, s: t.s, cut: !this.isStrung(t.reel) }));
+      return [aev];
     }
 
     // ------------------------------------------------------------------ 借り火: borrow one spark from the Ashwheel
@@ -990,7 +1042,7 @@
     }
     // 再演: the odds of the coming respin (held / jammed reels keep their cell).
     respinOdds() {
-      return this.comboOdds(this.reels.map((r, i) => (r.held || r.jam ? [this.paylineCell(i)] : r.strip)));
+      return this.comboOdds(this.reels.map((r, i) => (r.held || r.jam || this.isStrung(i) ? [this.paylineCell(i)] : r.strip)));
     }
     _bondOk(cells, wildAs) {
       const order = D().BOND_ORDER;
@@ -1050,7 +1102,7 @@
         bladeRaw: 0, bladeArmor: 0, blade: 0, flame: 0, skullDmg: 0, reaper: 0, selfDmg: 0,
         block: 0, heal: 0, embers: 0, sparks: 0, burn: 0, pyre: 0, cleanse: false, rampart: false, guardian: false,
         stagger: false, staggerWard: false, staggerBreak: false, shellNeed: 0, executed: false, sealBreaks: 0, sealedAfter: false, sealMult: 1, armor: 0,
-        directDmg: 0, totalDmg: 0, utility: 0,
+        directDmg: 0, totalDmg: 0, utility: 0, threads: 0, threadCuts: 0, threeCut: false, threadDmg: 0, cutCount: 0,
       };
       if (f.momentum && f.resolves === 0) { res.mult *= 1.5; res.multNotes.push('追撃 ×1.5'); }
       if (m.lastStand && this.hp <= this.maxHp * 0.3) { res.mult *= 1.5; res.multNotes.push('背水 ×1.5'); }
@@ -1099,7 +1151,7 @@
           if (n >= 3) { res.burn += 4; if (m.pyre) res.pyre = 1; }
         } else if (s === 'ward') {
           res.block += Math.round(amount('ward'));
-          if (n >= 2 && e.intent && e.intent.k === 'charge') { res.stagger = true; res.staggerWard = true; }
+          if (n >= 2 && e.intent && e.intent.k === 'charge' && !e.intent.threadOnly) { res.stagger = true; res.staggerWard = true; }
           if (n >= 2 && m.guardian) res.wardReflect = true;
           if (n >= 3) { res.rampart = true; if (m.guardian) res.guardian = true; }
         } else if (s === 'heart') {
@@ -1145,12 +1197,29 @@
         res.shellNeed = Math.max(0, (e.block || 0) + 1 - direct);
         if (direct > (e.block || 0)) { res.staggerBreak = true; res.stagger = true; }
       }
+      // 糸: strings cut by your own hand this turn (反動 each); on 終幕の段's countdown they add up to THREADS.need (三本断ち)
+      if (f.threads && f.threads.length && !f.threadsPaid && e.hp > 0) {
+        const TR = D().THREADS, cut = (t) => !(cells[t.reel] && cells[t.reel].thread === t.reel);
+        res.threads = f.threads.length;
+        res.threadCuts = f.threads.filter(cut).length;
+        // 終幕の段: the strings cut on the countdown add up (the same reel on another turn counts again)
+        if (e.intent && e.intent.countdown) { res.cutCount = (e.cutCount || 0) + res.threadCuts; res.threeCut = res.cutCount >= TR.need; }
+        res.threadDmg = res.threadCuts * TR.backlash + (res.threeCut ? TR.threeCut : 0);
+        res.totalDmg += res.threadDmg;
+        if (res.threeCut) res.stagger = true;
+      }
       // utility: used for Wild assignment and by bots
       const incoming = e.intent && e.intent.k !== 'charge' ? this.intentDamage(e.intent) : 0;
+      let dmgU = res.totalDmg;
+      if (res.threads) {
+        if (D().ENEMIES[e.id] && D().ENEMIES[e.id].final && !res.threeCut && !f.cutFree) dmgU = Math.min(dmgU, Math.max(0, e.hp - 1));
+        if (e.intent && e.intent.countdown) dmgU += res.threadCuts * 12;
+      }
       const blockUse = Math.min(res.block, Math.max(0, incoming - this.block)) + Math.max(0, res.block - incoming) * 0.15;
       const reflectPenalty = now && now.k === 'reflect' ? res.totalDmg * 0.5 : 0;
-      res.utility = res.totalDmg + blockUse * 0.9 + Math.min(res.heal, this.maxHp - this.hp) * 0.8 + res.embers * 0.2
+      res.utility = dmgU + blockUse * 0.9 + Math.min(res.heal, this.maxHp - this.hp) * 0.8 + res.embers * 0.2
         + res.sparks * 4 + res.burn * 1.5 + res.sealBreaks * 30 + (res.stagger ? 10 : 0) + (res.guardian ? incoming : 0)
+        + (res.threeCut ? this.intentDamage(e.intent) : 0)
         - res.selfDmg * 1.2 - reflectPenalty;
       return res;
     }
@@ -1166,14 +1235,14 @@
       const out = this._resolveLine(ev, false);
       if (out === 'end') return ev;
       // 連鎖: one bonus spin + resolve before the enemy acts
-      if (this.mods.chain && this._lastHadCombo && !this.fight.chainUsed && this.enemy && this.enemy.hp > 0 && this.reels.some((r) => !r.held && !r.jam)) {
+      if (this.mods.chain && this._lastHadCombo && !this.fight.chainUsed && this.enemy && this.enemy.hp > 0 && this.reels.some((r, i) => !r.held && !r.jam && !this.isStrung(i))) {
         this.fight.chainUsed = true;
         const spun = [];
-        for (const r of this.reels) {
-          const go = !r.held && !r.jam;
+        this.reels.forEach((r, i) => {
+          const go = !r.held && !r.jam && !this.isStrung(i);
           if (go) { r.pos = this.rng.int(r.strip.length); r.echo = null; }
           spun.push(go);
-        }
+        });
         ev.push({ t: 'chain' }, { t: 'spin', stops: this.reels.map((r) => r.pos), spun, chain: true });
         const out2 = this._resolveLine(ev, true);
         if (out2 === 'end') return ev;
@@ -1185,6 +1254,7 @@
 
     _endPlayerTurn() {
       const m = this.mods;
+      if (this.fight) { this.fight.threads = []; this.fight.threadsPaid = false; this.fight.cutFree = false; }
       for (let i = 0; i < this.reels.length; i++) {
         const r = this.reels[i];
         r.jam = false; r.echo = null;
@@ -1256,17 +1326,20 @@
         ev.push({ t: 'selfHit', amount: before - this.hp, hp: this.hp, cause: R.markedN ? 'mark' : 'skull', sym: R.marked });
       }
       // 4) damage to the enemy
-      let dealt = 0;
+      let dealt = 0, held = 0;
       const hit = (raw, kind) => {
         if (e.hp <= 0 || raw <= 0) return { dmg: 0, absorbed: 0 };
         let dmg = raw, absorbed = 0;
-        if (kind !== 'burn' && kind !== 'thorns' && kind !== 'reaper' && e.block > 0) { absorbed = Math.min(e.block, dmg); e.block -= absorbed; dmg -= absorbed; }
+        if (kind !== 'burn' && kind !== 'thorns' && kind !== 'reaper' && kind !== 'thread' && e.block > 0) { absorbed = Math.min(e.block, dmg); e.block -= absorbed; dmg -= absorbed; }
+        if (floor) { const d0 = dmg; dmg = Math.min(dmg, Math.max(0, e.hp - floor)); held += d0 - dmg; }
         e.hp = Math.max(0, e.hp - dmg);
         dealt += dmg;
         this.stats.maxHit = Math.max(this.stats.maxHit, dmg);
         return { dmg, absorbed };
       };
       const sm = R.sealMult;
+      if (R.threeCut) f.cutFree = true; // (深淵の繰り手: this turn may take its last HP)
+      const floor = this.hangSaves(R) ? 1 : 0;
       if (R.blade > 0 || R.bladeArmor > 0) {
         const r = hit(Math.round(R.blade * sm), 'blade');
         ev.push({ t: 'act', hero: 'knight', sym: 'blade', dmg: r.dmg, absorbed: r.absorbed, armor: R.bladeArmor, sealed: sm < 1,
@@ -1289,6 +1362,25 @@
         ev.push({ t: 'act', hero: null, sym: 'skull', dmg: r.dmg, absorbed: r.absorbed, hp: e.hp, sealed: sm < 1 });
       }
       if (R.reaper > 0) { const r = hit(R.reaper, 'reaper'); ev.push({ t: 'reaper', dmg: r.dmg, hp: e.hp }); }
+      if (R.threads > 0) {
+        f.threadsPaid = true;
+        this.stats.threadCuts = (this.stats.threadCuts || 0) + R.threadCuts;
+        this.stats.threadsAccepted = (this.stats.threadsAccepted || 0) + R.threads - R.threadCuts;
+        if (R.threeCut) this.stats.threeCuts = (this.stats.threeCuts || 0) + 1;
+        const r = R.threadDmg > 0 ? hit(R.threadDmg, 'thread') : { dmg: 0 };
+        const cd = !!(e.intent && e.intent.countdown);
+        if (cd) e.cutCount = R.threeCut ? 0 : R.cutCount;
+        // 三本断ち: the enemy loses this turn's action; a wound-up blow is struck out as by 怯み
+        const tev = { t: 'threads', cut: R.threadCuts, of: R.threads, three: R.threeCut, dmg: r.dmg, hp: e.hp };
+        if (cd) Object.assign(tev, { count: R.threeCut ? D().THREADS.need : R.cutCount, need: D().THREADS.need, reset: R.threeCut });
+        ev.push(tev);
+        if (R.threeCut && e.hp > 0) {
+          e.staggered = true;
+          // not on a wind-up: the action is lost, and the countdown goes back to its first cell
+          if (!(e.intent && e.intent.k === 'charge')) { e.stunned = true; if (e.intent && e.intent.countdown) e.phaseAt = (e.cursor || 0) + 1; }
+          ev.push({ t: 'stagger', by: 'threads' });
+        }
+      }
       // 灰鐘の番人: the hits broke through the shell on the 構え turn (two wards, when also there, already staggered it)
       if (R.staggerBreak && !R.staggerWard && e.hp > 0) { e.staggered = true; ev.push({ t: 'stagger', by: 'break' }); }
       // 5) reflect stance
@@ -1315,6 +1407,8 @@
         const r = hit(Math.round(e.burn * 2 * (e.seals > 0 ? 0.5 : 1)), 'burn');
         ev.push({ t: 'pyre', dmg: r.dmg, hp: e.hp, stacks: e.burn });
       }
+      // 深淵の繰り手: the line would have felled it, but without 三本断ち it hangs at 1 HP
+      if (held > 0) ev.push({ t: 'hung', hp: e.hp, held });
       if (D().ENEMIES[e.id].mirror && e.hp > 0) this._mirrorAfter(R);
       f.rampart = f.rampart || R.rampart;
       f.wardReflect = f.wardReflect || R.wardReflect;
@@ -1341,12 +1435,24 @@
       if (best) this.enemy.mirrorSym = best;
     }
 
+    // 深淵の繰り手 hangs by its strings: burn / thorns / reflected blows on the enemy's turn stop at 1 HP as well
+    _hang(ev) {
+      const e = this.enemy;
+      if (!e || e.hp > 0 || !this.hangSaves(null)) return;
+      e.hp = 1;
+      ev.push({ t: 'hung', hp: 1 });
+    }
+
     _checkBossPhase(ev) {
       const e = this.enemy;
       if (!e || !e.boss || e.hp <= 0) return;
       let np = e.phase;
-      if (e.seals <= 0 && np === 1) np = 2;
-      if (e.seals <= 0 && e.hp <= e.maxHp * 0.3) np = 3;
+      const PH = D().ENEMIES[e.id].phases;
+      if (PH) np = Math.max(np, e.hp <= e.maxHp * PH[1] ? 3 : e.hp <= e.maxHp * PH[0] ? 2 : 1);
+      else {
+        if (e.seals <= 0 && np === 1) np = 2;
+        if (e.seals <= 0 && e.hp <= e.maxHp * 0.3) np = 3;
+      }
       if (np !== e.phase) {
         e.phase = np;
         const d = this._gainSparks(1);
@@ -1372,6 +1478,7 @@
         if (!this.hasRelic('hatwax')) e.burn -= 1;
         this.stats.burnDealt += dmg;
         ev.push({ t: 'burnTick', dmg, hp: e.hp, stacks: e.burn });
+        this._hang(ev);
         if (e.hp <= 0) return ev.concat(this._enemyDefeated());
         this._checkBossPhase(ev);
       }
@@ -1386,7 +1493,7 @@
       // 怯み: the heavy follow-up is struck from the script unplayed
       if (e.staggered) {
         e.staggered = false;
-        if (it.k === 'charge') {
+        if (it.k === 'charge' && !(it.ph && it.ph !== e.phase)) {
           const skipped = this._nextCell(e);
           Run.scriptTick(e, skipped);
           e.lastK = 'staggered';
@@ -1429,6 +1536,7 @@
     // Deaths after an enemy action. Returns the final event list if the fight or the run ended.
     _afterEnemyAct(ev) {
       const e = this.enemy;
+      this._hang(ev);
       if (e.hp <= 0) {
         if (this.hp <= 0) { this.hp = 1; ev.push({ t: 'cling', hp: 1 }); }
         return ev.concat(this._enemyDefeated());
@@ -1469,7 +1577,9 @@
       switch (it.k) {
         case 'attack': {
           ev.push(this._attackParty(atk(it.v), it.heavy));
+          if (it.finale) e.cutCount = 0;
           if (it.guard) { e.block += it.guard; ev.push({ t: 'enemyGuard', block: e.block }); }
+          if (it.steal && this.sparks > 0) { const n = Math.min(this.sparks, it.steal); this.sparks -= n; ev.push({ t: 'drain', stolen: n, sparks: this.sparks }); }
           if (it.grow) { e.atkBonus += it.grow; ev.push({ t: 'enemyGrow', atkBonus: e.atkBonus }); }
           if (it.doomTick) ev.push({ t: 'doom', n: (e.doom || 3) - 1 });
           break;
@@ -1542,7 +1652,7 @@
         const firstKill = ev.some((x) => x.t === 'enemyDie');
         // the bonus spin happens iff the first line had a combo and did not end the fight (the turn reaches the enemy)
         const reachedEnemy = ev.some((x) => x.t === 'enemyTurn');
-        const chain = chainArmed && !!c._lastHadCombo && reachedEnemy && this.reels.some((r) => !r.held && !r.jam);
+        const chain = chainArmed && !!c._lastHadCombo && reachedEnemy && this.reels.some((r, i) => !r.held && !r.jam && !this.isStrung(i));
         const P = { random: chain, chain, dice: false, damage: 0, debtRaw: 0, hits: [], reflect: null, skipped: null, debt: null, next: null, enemyAfter: null,
           partyDies: c.phase === 'dead', enemyDies: firstKill, secondWind: ev.some((x) => x.t === 'secondWind'), hpAfter: c.hp };
         void enemy0;
@@ -1551,7 +1661,7 @@
         let enemyTurn = false, lastCause = 'strike';
         for (const x of ev) {
           if (x.t === 'enemyTurn') enemyTurn = true;
-          if (!enemyTurn && x.hp != null && ((x.t === 'act' && (x.sym === 'blade' || x.sym === 'flame' || x.sym === 'skull')) || x.t === 'reaper' || x.t === 'pyre')) P.strikeHp = x.hp;
+          if (!enemyTurn && x.hp != null && ((x.t === 'act' && (x.sym === 'blade' || x.sym === 'flame' || x.sym === 'skull')) || x.t === 'reaper' || x.t === 'pyre' || x.t === 'threads')) P.strikeHp = x.hp;
           if (enemyTurn && x.t === 'burnTick') { P.burnTick += x.dmg; lastCause = 'burn'; }
           if (enemyTurn && x.t === 'enemyHeal') P.healed += x.amount;
           if (enemyTurn && x.t === 'enemyAttack' && x.thorns) { P.thornsBack += x.thorns; lastCause = 'thorns'; }
@@ -1610,7 +1720,8 @@
     // A read-only copy of what ai() reads, for walking the script forward.
     _ghostOf(e) {
       return { id: e.id, boss: !!e.boss, hp: e.hp, maxHp: e.maxHp, turn: e.turn, cursor: e.cursor || 0, lastK: e.lastK, doom: e.doom,
-        markIdx: e.markIdx, phase: e.phase, seals: e.seals, atkBonus: e.atkBonus, atkMult: e.atkMult, mirrorSym: e.mirrorSym };
+        markIdx: e.markIdx, phase: e.phase, seals: e.seals, atkBonus: e.atkBonus, atkMult: e.atkMult, mirrorSym: e.mirrorSym,
+        phaseFor: e.phaseFor, phaseAt: e.phaseAt };
     }
     // Read the next cell on a copy. Dice are never rolled: a cell that needs them comes back unknown.
     _ghostNext(g) {
@@ -1663,7 +1774,7 @@
         const n2 = P.dice ? Object.assign({}, UNKNOWN_CELL) : this._ghostNext(g);
         add('next2', n2, g, cond2);
         // 返し鏡: the next cell's seal comes from this very line (exact); the one after depends on the next resolve
-        if (D().ENEMIES[e.id].mirror) for (const c of cells) if (c.role === 'next2' && !c.cond && !c.unknown) c.cond = 'mirror';
+        if (D().ENEMIES[e.id].mirror) for (const c of cells) if (c.role === 'next2' && !c.cond && !c.unknown && c.it.now && c.it.now.k === 'mark') c.cond = 'mirror';
         // this resolve changes the boss's act: the cells after it belong to the new script (exact, but 台本送り cannot reach them)
         if (e.boss) for (const c of cells) {
           if ((c.role === 'next' || c.role === 'next2') && P.phaseAfter != null && P.phaseAfter !== P.phaseBefore) c.actChange = P.phaseAfter;
@@ -1681,7 +1792,7 @@
       this._ghostPlay(g, n1); g.turn += 1;
       add('next2', this._ghostNext(g), g, c2 || (n1.k === 'charge' ? 'stagger' : null));
       // 返し鏡: before the spin, the seals of the coming cells are decided by resolves still to come
-      if (D().ENEMIES[e.id].mirror) for (const c of cells) if (c.role !== 'now' && !c.cond && !c.unknown) c.cond = 'mirror';
+      if (D().ENEMIES[e.id].mirror) for (const c of cells) if (c.role !== 'now' && !c.cond && !c.unknown && c.it.now && c.it.now.k === 'mark') c.cond = 'mirror';
       return { cells, spun: false };
     }
 
@@ -1703,6 +1814,8 @@
       this.lastFightTurns = this.fight.turn + 1;
       if (e.boss) {
         this.bossHpPct = 0;
+        // 深淵の繰り手: the true final boss ends the run as won (the 真のクリア record and the ending come in stage 4d)
+        if (D().ENEMIES[e.id].final) return ev.concat(this._win());
         // 第三層から: the skipped floors are paid back only when the run gets this far
         if (sc && sc.bossEmbers) { this._gainEmbers(sc.bossEmbers, 'shortcut'); ev.push({ t: 'embers', amount: sc.bossEmbers, total: this.embers, src: 'shortcut' }); }
         return ev.concat(this.mods.deepUnlocked && !this.deep ? this._settleBoss() : this._win());

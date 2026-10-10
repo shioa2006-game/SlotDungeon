@@ -218,7 +218,7 @@
       treeDone: treeState(profile).done,              // every 灯紋 lit (B17's first condition)
       keeperKilled: finalState(profile).keeper,       // the B16 elite beaten before (its second)
       abbotBonus: (st.eliteKills.abbot || 0) > 0,
-      deepUnlocked: (st.wins || 0) > 0, // after the first clear, 灰輪の主 can be followed into 灰の底
+      deepUnlocked: (st.wins || 0) > 0, // a save that has cleared (灰の底 itself opens at the first clear's boss: engine)
     };
     if (m.sparks) { m.startSparks = 2; m.maxSparks = 3; m.sparkPerWin = 1; }
     if (!m.sparks) m.borrow = false;

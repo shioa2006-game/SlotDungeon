@@ -166,6 +166,12 @@
     // ---------------------------------------------------------------- run / room flow
     async on_runStart() { this.rs.scene.curtainTarget = 0; await this.wait(0.2); }
     async on_shortcut(ev) {
+      if (ev.finalOnly) {
+        const k = ev.kit && SD.Data.FINAL_KITS.find((x) => x.id === ev.kit);
+        SD.FX.banner('最深の間へ', { sub: k ? `${k.name}で、深淵の繰り手に挑む` : '刻印と遺物を選んで、深淵の繰り手に挑む', size: 44 });
+        await this.wait(0.8);
+        return;
+      }
       if (ev.deepOnly) SD.FX.banner('灰の底から降下', { sub: '刻印と遺物を選べる・本編の記録には付かない', size: 44 });
       else if (ev.bossEmbers) SD.FX.banner(`${ev.label}降下`, { sub: `刻印と遺物を選べる・灰輪の主を倒すと残り火 +${ev.bossEmbers}`, size: 44 });
       else SD.FX.banner('第二層から降下', { sub: `刻印と遺物を選べる・最初の勝利で残り火 +${ev.embers}`, size: 44 });
@@ -240,6 +246,13 @@
     }
     async on_chiselStart(ev) { this.rs.showChisel(ev); }
     async on_chiselEnd() { this.rs.closeModal(); }
+    // 最深の間へ's 型: everything at once (the reels, the relics, HP and sparks as they now are)
+    async on_kit() {
+      const rs = this.rs, run = rs.run, V = this.V();
+      rs.reels.sync(run); rs.updateRelics(); rs.renderLeft();
+      V.hp = V.hpShown = V.hpGhost = run.hp; V.maxHp = run.maxHp; V.sparks = run.sparks;
+      this.sfx('reward');
+    }
     async on_chiseled(ev) { this.sfx('nudge'); this.rs.refreshChisel && this.rs.refreshChisel(); }
     async on_offerTaken() { this.sfx('reward'); }
     async on_carved(ev) {

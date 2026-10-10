@@ -78,8 +78,29 @@
     13: { gateStat: ['deepRuns', 1], carvings: 4, relics: 4, embers: 0, label: '灰の底から', postClear: true, deepOnly: true },
     // 最深の間へ (B17 only): opens with B17 itself (every 灯紋 lit + the B16 elite beaten). The kit is about what a run that
     // beat the B16 elite carries (measured: the same win rate as such runs, docs/EXPANSION_4B_PROMISE.md gate B)
-    17: { gateFinal: true, carvings: 10, relics: 6, embers: 0, label: '最深の間へ', postClear: true, finalOnly: true },
+    17: { gateFinal: true, carvings: 10, relics: 6, embers: 0, label: '最深の間へ', postClear: true, finalOnly: true, kits: true },
   };
+  // 最深の間へ's 型 (the user's choice at G5: one pick of three instead of 16 one by one). Each is applied as it stands
+  // (Run opts.kit): the start's 2 鑿 (removes) and its carvings, then its relics. Sized by the gate B bots to the 10 + 6
+  // picked one by one (a coherent kit is far stronger than as many random picks: the first drafts won 74-87% casually).
+  // Measured (B17 from the start, 400 fights each; T0h / casual / engaged / omni): picked one by one 53 / 40 / 76 / 92,
+  // edge 51 / 37 / 76 / 68, guard 42 / 37 / 69 / 74 (wins in 15 turns, the others in 10), bond 53 / 40 / 70 / 82.
+  // Without one (the test entrance) the 10 + 6 are picked one by one as before.
+  const KIT_CHISEL = [{ kind: 'remove', reel: 0, sym: 'lantern' }, { kind: 'remove', reel: 2, sym: 'lantern' }];
+  const FINAL_KITS = [
+    { id: 'edge', name: '剣と焔の型', sub: '剣と焔で、糸を一気に断つ',
+      carve: KIT_CHISEL.concat([{ kind: 'add2', reel: 0, sym: 'blade' }, { kind: 'add2', reel: 1, sym: 'flame' }, { kind: 'add2', reel: 2, sym: 'blade' },
+        { kind: 'transmute', reel: 1, from: 'lantern', to: 'flame' }, { kind: 'gild', reel: 1, sym: 'flame' }]),
+      relics: ['whetstone', 'flint', 'hatwax', 'fang'] },
+    { id: 'guard', name: '盾と癒の型', sub: '盾で耐え、癒で持ちこたえる（戦いは長め）',
+      carve: KIT_CHISEL.concat([{ kind: 'add', reel: 0, sym: 'ward' }, { kind: 'add', reel: 1, sym: 'heart' }, { kind: 'add', reel: 2, sym: 'ward' }]),
+      relics: ['buckler', 'holywater', 'mirror'] },
+    { id: 'bond', name: '絆の型', sub: '癒・焔・剣を繋ぐ絆で、どの糸も断つ',
+      carve: KIT_CHISEL.concat([{ kind: 'add2', reel: 0, sym: 'heart' }, { kind: 'add2', reel: 1, sym: 'flame' }, { kind: 'add2', reel: 2, sym: 'blade' },
+        { kind: 'transmute', reel: 1, from: 'lantern', to: 'flame' },
+        { kind: 'gild', reel: 0, sym: 'heart' }, { kind: 'gild', reel: 1, sym: 'flame' }, { kind: 'gild', reel: 2, sym: 'blade' }]),
+      relics: ['stardust', 'mirror', 'twinring', 'hourglass'] },
+  ];
 
   // ---------------------------------------------------------------- enemies
   // ai(e, run) -> intent { k, v, heavy, grow, doomTick, now:{k,v,sym}, label }
@@ -467,6 +488,6 @@
 
   SD.Data = {
     SYMBOLS, WILD_PRIORITY, BOND_ORDER, MATCH_MULT, START_STRIPS, STRIP_MIN, STRIP_MAX, BASE_HP,
-    HEROES, ZONES, FLOORS, LAST_FLOOR, DEEP_FIRST_FLOOR, DEEP_LAST_FLOOR, DEEP_PAIR, FINAL_FLOOR, SHORTCUTS, ENEMIES, RELICS, EVENTS, SKILLS, SKILL_BY_ID,
+    HEROES, ZONES, FLOORS, LAST_FLOOR, DEEP_FIRST_FLOOR, DEEP_LAST_FLOOR, DEEP_PAIR, FINAL_FLOOR, SHORTCUTS, FINAL_KITS, ENEMIES, RELICS, EVENTS, SKILLS, SKILL_BY_ID,
   };
 })();

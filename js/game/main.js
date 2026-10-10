@@ -170,12 +170,13 @@
     Game.profile = SD.Meta.load();
     // stage 4b test entrance (?test=b17): a whole-tree profile kept in memory only (the save is never read back or written),
     // then 深淵の繰り手. The kit (10 carvings + 6 relics, about a board that cleared B16) is picked automatically; &pick=1
-    // picks 6 + 3 by hand. &act=2 / 3 / 4 starts the fight at 面の段 / 祈りの段 / 終幕の段. The real entrances come in stage 4d.
+    // picks them by hand; &kit=1 chooses one of 最深の間へ's 型 instead. &act=2 / 3 / 4 starts the fight at 面の段 / 祈りの段 /
+    // 終幕の段. The real entrances come in stage 4d.
     const q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
     const test = q ? q.get('test') : null;
     if (test === 'b17') {
       Game.testMode = true;
-      Game.testOpts = { pick: q.get('pick') === '1', act: Math.max(1, Math.min(4, +q.get('act') || 1)) }; // (act: applied when the fight starts)
+      Game.testOpts = { pick: q.get('pick') === '1', kit: q.get('kit') === '1', act: Math.max(1, Math.min(4, +q.get('act') || 1)) }; // (act: applied when the fight starts)
       const p = SD.Meta.newProfile();
       for (const s of SD.Data.SKILLS) p.unlocked[s.id] = true;
       Object.assign(p.stats, { runs: 40, wins: 3, bestFloor: 16, deepRuns: 3, deepBest: 16, deepClears: 1, eliteKills: { bellhound: 3, abbot: 3, ashlord: 3, bellkeeper: 1 } });
@@ -230,7 +231,7 @@
     const start = () => {
       const T = Game.testOpts;
       Game.setScreen(Game.testMode && T.title ? new SD.Screens.TitleScreen() : Game.testMode && T.camp ? new SD.Screens.CampScreen({ focus: 'keeper' }) : Game.testMode ? new SD.Screens.RunScreen({ startFloor: SD.Data.FINAL_FLOOR, act: T.act,
-        kit: { auto: !T.pick } }) /* (the kit itself is 最深の間へ's: SHORTCUTS[17]) */ : new SD.Screens.TitleScreen());
+        kit: T.kit ? null : { auto: !T.pick } }) /* (the kit itself is 最深の間へ's: SHORTCUTS[17] / a 型) */ : new SD.Screens.TitleScreen());
       requestAnimationFrame(frame);
     };
     if (document.fonts && document.fonts.load) {

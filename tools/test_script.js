@@ -532,10 +532,10 @@ function unit() {
       setPayline(r, [sym, sym, sym]);
       return r.resolve();
     };
-    // never cleared: the boss ends the run as before (also on the very run that clears)
+    // never cleared: the very run that clears is offered 灰の底 too (G5: it used to end there, and 灰の底 waited a run)
     const n = fightRun(SD, ids, 'ashlord', 12, {});
     const evn = killNow(n);
-    ok(n.phase === 'won' && !n.deep && evn.some((x) => x.t === 'runEnd') && !evn.some((x) => x.t === 'bossSettled'), 'not cleared before: the boss ends the run (no choice)');
+    ok(n.phase === 'descent' && !n.deep && evn.some((x) => x.t === 'bossSettled') && !evn.some((x) => x.t === 'runEnd'), 'the first clear: 灰の底 is offered at once (the win settled)');
     // cleared before: the win is settled, then the choice
     const winP = (p) => { p.stats.wins = 1; };
     const r = fightRun(SD, ids, 'ashlord', 12, { profile: winP });
@@ -1004,6 +1004,15 @@ function unit() {
     const rc = new SD.Run(M.computeMods(pc), { seed: 5, startFloor: D.FINAL_FLOOR });
     const evc = rc.begin();
     eq([rc.finalOnly, rc.pending.length + (rc.phase === 'crossroads' ? 1 : 0), evc.find((x) => x.t === 'shortcut').finalOnly], [true, D.SHORTCUTS[17].carvings + D.SHORTCUTS[17].relics, true], '最深の間へ: a B17-only run, the kit chosen first (10 carvings + 6 relics)');
+    // ...or with a 型 (G5): applied as it stands — no picks, no 鑿 — and straight into 深淵の繰り手
+    const len = (r) => r.reels.reduce((s, x) => s + x.strip.length, 0);
+    for (const k of D.FINAL_KITS) {
+      const rk = new SD.Run(M.computeMods(pc), { seed: 5, startFloor: D.FINAL_FLOOR, kit: k.id }), len0 = len(rk);
+      const evk = rk.begin();
+      const grow = k.carve.reduce((s, o) => s + (o.kind === 'add2' ? 2 : o.kind === 'add' ? 1 : o.kind === 'remove' ? -1 : 0), 0) + (k.relics.indexOf('stardust') >= 0 ? 1 : 0);
+      ok(rk.finalOnly && !rk.pending.length && rk.phase === 'idle' && rk.enemy && rk.enemy.id === 'kurite' && k.relics.every((id) => rk.relics.indexOf(id) >= 0) &&
+        rk.relics.length === k.relics.length && len(rk) === len0 + grow && evk.some((x) => x.t === 'kit' && x.id === k.id), `最深の間へ with ${k.name}: its carvings and relics, then the fight`);
+    }
     // a fall at 最深の間 (a B17-only run): counted as such, nothing else
     const rf = fightRun(SD, ALLS, 'kurite', D.FINAL_FLOOR, { hp: 1, profile: (q) => { q.stats.wins = 1; q.stats.eliteKills.bellkeeper = 1; } });
     rf.finalOnly = true; rf.settledFinal = { embers: 0, stats: Object.assign({}, rf.stats), summary: null }; rf.secondWindUsed = true;
@@ -1190,7 +1199,7 @@ function regress(N) {
   // cells a nudge can reach (±2). A run is compared step by step past any 星 on the reels; only when the two builds part
   // while a 星 sits on the payline or within reach of it (this step or the one before) is the run counted as parted by
   // the intended change, and its comparison ends there. Any other difference is a regression.
-  let mismatches = 0, steps = 0, wildStops = 0, wildSteps = 0;
+  let mismatches = 0, steps = 0, wildStops = 0, wildSteps = 0, clearStops = 0;
   const wildNear = (run) => run.reels.some((r) => {
     if (r.echo && r.echo.s === 'wild') return true;
     const L = r.strip.length;
@@ -1217,6 +1226,7 @@ function regress(N) {
       const pa = proj(ra), pb = proj(rb);
       if (JSON.stringify(pa) !== JSON.stringify(pb) || evProj(ea) !== evProj(eb)) {
         if (near) { wildStops++; break; } // parted by the intended 星 rule
+        if (ra.phase === 'won' && rb.phase === 'descent' && rb.floor === Bc.Data.LAST_FLOOR) { clearStops++; break; } // (G5: the first clear offers 灰の底)
         mismatches++;
         if (mismatches <= 3) {
           console.log(`  ✗ run ${n} seed ${seed} step ${guard} diverged`);
@@ -1264,7 +1274,7 @@ function regress(N) {
     }
   }
   ok(mismatches === 0, `identical play without the new 灯紋 (${mismatches} diverged runs, ${steps} steps compared; ${wildStops} runs parted where a 星 was in reach — its rule changed on purpose)`);
-  console.log(`  compared ${steps} steps over ${N} runs (${wildSteps} of them with a 星 on the reels); ${wildStops} runs parted where a 星 was in reach (its rule changed on purpose)`);
+  console.log(`  compared ${steps} steps over ${N} runs (${wildSteps} of them with a 星 on the reels); ${wildStops} runs parted where a 星 was in reach (its rule changed on purpose); ${clearStops} first clears now offered 灰の底`);
 }
 function SD_rng(seed) { const S = currentSD(); return S.Util.makeRng(seed); }
 

@@ -81,6 +81,32 @@ const TREE_SX = 1.12;
   const BRANCH_COL = { weave: '#c58bff', valor: '#ff6a5a', hearth: '#4fe0a8', bridge: '#e8bf6a', core: '#ffd257' };
   const KIND_TAG = { verb: '新しい操作', rule: 'ルール', prob: '確率空間', stat: '数値', room: '部屋', core: '' };
 
+  // 最深の間へ's 型 (Data.FINAL_KITS): one line of what it carves and carries, and every item on hover
+  function kitSummary(k) {
+    const S = (s) => UI().symName(s), add = {}, more = [];
+    for (const o of k.carve) {
+      if (o.kind === 'add' || o.kind === 'add2') add[o.sym] = (add[o.sym] || 0) + (o.kind === 'add2' ? 2 : 1);
+      else if (o.kind === 'transmute') more.push(`${S(o.from)}→${S(o.to)}`);
+      else if (o.kind === 'gild') more.push(`金箔の${S(o.sym)}`);
+    }
+    const carve = Object.keys(add).map((s) => `${S(s)}+${add[s]}`).concat(more).join('・');
+    return `刻む：${carve}<br>遺物：${k.relics.map((id) => SD.Data.RELICS[id].name).join('・')}`;
+  }
+  function kitTip(k) {
+    return `<b>${k.name}</b><br>` + k.carve.map((o) => '・' + UI().offerText(o).title).join('<br>') + '<br>' +
+      k.relics.map((id) => `・<b>${SD.Data.RELICS[id].name}</b>：${SD.Data.RELICS[id].desc}`).join('<br>');
+  }
+
+  // what is left before 最深の間 opens ('' once it is open): shown when 灰の底 is crossed
+  function finalHint(p) {
+    const fs = SD.Meta.finalState(p);
+    if (fs.open) return '';
+    const left = [];
+    if (!fs.tree.done) left.push(`すべての灯紋を灯す（あと ${fs.tree.all - fs.tree.lit}）`);
+    if (!fs.keeper) left.push(`灰の底の${UI().deepEliteName()}を倒す`);
+    return `<b>さらに深く、最深の間がある。</b><br>開く条件の残り：${left.join('、')}`;
+  }
+
   function nodePos(n) {
     const a = (n.a * Math.PI) / 180, r = RING_R[n.r] || 0;
     return { x: TREE_C.x + Math.cos(a) * r * TREE_SX, y: TREE_C.y + Math.sin(a) * r };
@@ -267,10 +293,11 @@ const TREE_SX = 1.12;
       // the 4th start: 最深の間へ once B17 is open; until then a veiled cell with its two conditions (the last goal, in view)
       if (has(17)) {
         const S = SD.Data.SHORTCUTS[17];
-        cell(17, '最深の間へ', `B17・刻印${S.carvings}+遺物${S.relics}`, `<b>最深の間（B17）へ</b><br>支度：刻印${S.carvings}＋遺物${S.relics}を選んで、深淵の繰り手に挑む<br>最深の間だけの挑戦。ほかの記録（挑戦・勝利など）は付かない`, 'final');
+        cell(17, '最深の間へ', 'B17・支度の型を選ぶ', `<b>最深の間（B17）へ</b><br>支度の型（${SD.Data.FINAL_KITS.map((k) => k.name).join('・')}）を1つ選んで、深淵の繰り手に挑む<br>最深の間だけの挑戦。ほかの記録（挑戦・勝利など）は付かない`, 'final');
       } else {
         const fs = SD.Meta.finalState(this.profile);
-        const v = U.el('div', 'btn secondary sc locked', '？？？ <small>まだ閉ざされている</small>');
+        const cond = (done, text) => `<span class="cond${done ? ' done' : ''}">${done ? '✓' : '・'}${text}</span>`;
+        const v = U.el('div', 'btn secondary sc locked', `？？？ <small>${cond(fs.tree.done, `灯紋 ${fs.tree.lit}/${fs.tree.all}`)}${cond(fs.keeper, `${SD.UI.deepEliteName()}を倒す`)}</small>`);
         U.bindTip(v, `<b>？？？</b><br>${fs.tree.done ? '✓' : '・'} すべての灯紋を灯す（${fs.tree.lit} / ${fs.tree.all}）<br>${fs.keeper ? '✓' : '・'} 灰の底の${SD.UI.deepEliteName()}を倒す`);
         grid.appendChild(v);
       }
@@ -517,6 +544,12 @@ const TREE_SX = 1.12;
       SD.FX.clear();
       this.buildDom();
       setTimeout(() => { this.scene.curtainTarget = 0; }, 150);
+      // 最深の間へ: the 型 is chosen first (one pick of three); the run begins with it
+      if (this.startFloor === SD.Data.FINAL_FLOOR && SD.Data.SHORTCUTS[this.startFloor].kits && !this.kit) { this.showKitChoice(); return; }
+      this.beginRun();
+    }
+
+    beginRun() {
       const fresh = (this.profile.seen.fresh || []).map((id) => SD.Data.SKILL_BY_ID[id]).filter(Boolean);
       if (fresh.length) {
         this.profile.seen.fresh = [];
@@ -1244,6 +1277,32 @@ const TREE_SX = 1.12;
       d.help.innerHTML = lines.join('<br>');
     }
 
+    // 最深の間へ: choose the 型 (Data.FINAL_KITS) — or go back to the camp (nothing has begun)
+    showKitChoice() {
+      const U = UI(), G = SD.Game;
+      this.state = 'modal'; this.modalOpen = true;
+      const m = this.dom.modal;
+      m.innerHTML = ''; m.classList.add('show');
+      const box = U.el('div', 'event-box kit-box');
+      box.appendChild(U.el('div', 'event-glyph', '型'));
+      box.appendChild(U.el('div', 'event-name', '支度の型を選ぶ'));
+      box.appendChild(U.el('div', 'event-text', '最深の間へ持っていく支度。どの型も、強さは同じくらい。'));
+      const opts = U.el('div', 'event-opts');
+      for (const k of SD.Data.FINAL_KITS) {
+        const b = U.button(`${k.name}<small>${k.sub}</small><span class="kit-items">${kitSummary(k)}</span>`, 'event-opt kit-opt', () => {
+          if (this.run.phase !== 'start') return;
+          this.run.kitId = k.id;
+          this.closeModal(); this.state = 'anim';
+          this.beginRun();
+        });
+        U.bindTip(b, kitTip(k));
+        opts.appendChild(b);
+      }
+      opts.appendChild(U.button('野営地へ戻る', 'event-opt kit-back', () => G.setScreen(new CampScreen())));
+      box.appendChild(opts);
+      m.appendChild(box);
+    }
+
     // ------------------------------------------------------------------ crossroads / events / chisel modals
     closeModal() {
       this.dom.modal.innerHTML = ''; this.dom.modal.classList.remove('show'); this.modalOpen = false; SD.UI.hideTip();
@@ -1523,8 +1582,9 @@ const TREE_SX = 1.12;
       m.innerHTML = ''; m.classList.add('show');
       const box = U.el('div', 'event-box descent-box');
       box.appendChild(U.el('div', 'event-glyph', '灰'));
-      box.appendChild(U.el('div', 'event-name', '灰輪の主を討った'));
-      box.appendChild(U.el('div', 'event-text', '勝利は確定した（記録と残り火は保存済み）。<br>灰輪の下に、まだ<b>灰の底</b>が続いている。'));
+      const first = this.profile.stats.wins === 1; // (the first clear: 灰の底 opens here)
+      box.appendChild(U.el('div', 'event-name', first ? '初めて灰輪の主を討った' : '灰輪の主を討った'));
+      box.appendChild(U.el('div', 'event-text', (first ? '<b>――灰の底への道が開かれた。</b><br>' : '') + '勝利は確定した（記録と残り火は保存済み）。<br>灰輪の下に、まだ<b>灰の底</b>が続いている。'));
       const opts = U.el('div', 'event-opts');
       const go = (down) => { if (this.run.phase !== 'descent') return; const evs = this.run.chooseDescent(down); this.closeModal(); this.play(evs); };
       opts.appendChild(U.button('さらに降りる<small>灰の底 B13〜B16。重ね殻と返し鏡に必ず出会う。倒れても勝利は失わない</small>', 'event-opt', () => go(true)));
@@ -1664,6 +1724,7 @@ const TREE_SX = 1.12;
         box.appendChild(U.el('div', 'end-title' + (d.cleared ? ' win' : ''), d.cleared ? '灰の底を越えた' : `灰の底 B${d.floor} で力尽きた`));
         box.appendChild(U.el('div', 'end-sub', d.cleared ? `${SD.UI.deepEliteName()}を討った。（灰の底からの挑戦・本編の記録には付かない）` : '灰の底からの挑戦。本編の記録には付かない。'));
         if (res.firstDeepElite) box.appendChild(U.el('div', 'win-note deep', `<b>${SD.UI.deepEliteName()}を初めて討った。</b>灰の底の鐘は、もう鳴らない。`));
+        if (d.cleared && finalHint(p)) box.appendChild(U.el('div', 'win-note final', finalHint(p)));
         const k = summary.killer;
         if (k && !d.cleared) {
           const kb = U.el('div', 'killer');
@@ -1708,8 +1769,9 @@ const TREE_SX = 1.12;
         cell('灯した灯紋', `${lit} / ${all}`);
         box.appendChild(grid);
         if (summary.deep) box.appendChild(U.el('div', 'win-note deep', summary.deep.cleared ? `<b>灰の底を越えた。</b>${SD.UI.deepEliteName()}を討った。${res.firstDeepElite ? '灰の底の鐘は、もう鳴らない。' : ''}` : `<b>灰の底 B${summary.deep.floor} で力尽きた。</b>灰輪の主を討った勝利は、そのまま残る。`));
-        else if (st.bossKills <= 1) box.appendChild(U.el('div', 'win-note', '最初は祈るだけだった灯輪を、三人はいま自分の手で廻している。<br>灯紋はまだ残っている――別の道で、もう一度深淵へ。'));
-        if (!summary.settled && st.wins === 1) box.appendChild(U.el('div', 'win-note deep', '<b>灰の底が開いた。</b>次の挑戦から、灰輪の主を倒した先へ降りられる。<br>近道「第三層から（B9）」も開いた。'));
+        if (summary.deep && summary.deep.cleared && finalHint(p)) box.appendChild(U.el('div', 'win-note final', finalHint(p)));
+        if (st.bossKills <= 1) box.appendChild(U.el('div', 'win-note', '最初は祈るだけだった灯輪を、三人はいま自分の手で廻している。<br>灯紋はまだ残っている――別の道で、もう一度深淵へ。'));
+        if (st.wins === 1) box.appendChild(U.el('div', 'win-note deep', (summary.deep ? '' : '<b>灰の底が開いた。</b>灰輪の主を倒すたびに、その先へ降りられる。<br>') + '近道「第三層から（B9）」も開いた。'));
       } else {
         box.appendChild(U.el('div', 'end-title', `B${Math.max(summary.floor, summary.startFloor || 1)} で灯が消えた`));
         const k = summary.killer;
@@ -1793,7 +1855,7 @@ const TREE_SX = 1.12;
       const deepRetry = !!summary.deep && SD.Meta.computeMods(p).shortcuts.indexOf(13) >= 0;
       const finalRetry = !!summary.final && SD.Meta.computeMods(p).shortcuts.indexOf(17) >= 0;
       let lead = null;
-      if (finalRetry && !summary.final.won) lead = U.button('最深の間から再挑戦 <small>B17・新しい支度から</small>', 'primary big', () => G.setScreen(new RunScreen({ startFloor: 17 })), { silent: true });
+      if (finalRetry && !summary.final.won) lead = U.button('最深の間から再挑戦 <small>B17・支度の型を選び直す</small>', 'primary big', () => G.setScreen(new RunScreen({ startFloor: 17 })), { silent: true });
       else if (primaryAction) lead = U.button(primaryAction.label + ' <kbd>Space</kbd>', 'primary big', primaryAction.fn, { silent: true });
       else if (deepRetry) lead = U.button('灰の底から再挑戦 <small>B13・新しい支度から</small>', 'primary big', () => G.setScreen(new RunScreen({ startFloor: 13 })), { silent: true });
       const camp = U.button('灯紋の輪へ', lead ? 'secondary' : 'primary big', () => G.setScreen(new CampScreen()));

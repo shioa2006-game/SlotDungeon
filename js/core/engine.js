@@ -29,6 +29,7 @@
       this.seed = opts.seed != null ? opts.seed : Math.floor(Math.random() * 2147483647);
       this.rng = U().makeRng(this.seed);
       this.startFloor = opts.startFloor || 1;
+      this.kitId = opts.kit || null; // (最深の間へ: one of Data.FINAL_KITS, applied by begin())
       this.floor = 0;
       this.maxHp = mods.maxHp;
       this.hp = this.maxHp;
@@ -97,9 +98,17 @@
     begin() {
       const ev = [{ t: 'runStart', floor: this.startFloor }];
       const sc = D().SHORTCUTS[this.startFloor];
+      const kit = sc && sc.kits && this.kitId ? D().FINAL_KITS.find((k) => k.id === this.kitId) : null;
       if (sc) {
-        for (let i = 0; i < sc.carvings; i++) this.pending.push('carving');
-        for (let i = 0; i < sc.relics + (this.mods.abbotBonus && this.startFloor === 5 ? 1 : 0); i++) this.pending.push('relic');
+        if (kit) {
+          // a 型: its carvings (the start's 鑿 included) and relics, as they stand — nothing to pick, one event for all
+          for (const o of kit.carve) this._applyOffer(o);
+          for (const id of kit.relics) this._addRelic(id);
+          ev.push({ t: 'kit', id: kit.id });
+        } else {
+          for (let i = 0; i < sc.carvings; i++) this.pending.push('carving');
+          for (let i = 0; i < sc.relics + (this.mods.abbotBonus && this.startFloor === 5 ? 1 : 0); i++) this.pending.push('relic');
+        }
         // 灰の底から: a 灰の底-only run (no boss, no main-game record); B13 / B14 order is rolled now
         if (sc.deepOnly) {
           this.deep = { order: this.rng.shuffle(D().DEEP_PAIR.slice()) };
@@ -114,9 +123,10 @@
         const sev = { t: 'shortcut', floor: this.startFloor, embers: sc.embers };
         if (sc.postClear) Object.assign(sev, { label: sc.label, bossEmbers: sc.bossEmbers || 0, deepOnly: !!sc.deepOnly }); // (B5's event is unchanged)
         if (sc.finalOnly) sev.finalOnly = true;
+        if (kit) sev.kit = kit.id;
         ev.push(sev);
       }
-      if (this.mods.chiselStart > 0) return ev.concat(this._beginChisel(this.mods.chiselStart, 'remove', 'start'));
+      if (this.mods.chiselStart > 0 && !kit) return ev.concat(this._beginChisel(this.mods.chiselStart, 'remove', 'start'));
       return ev.concat(this._continue());
     }
 
@@ -1768,7 +1778,8 @@
         if (D().ENEMIES[e.id].final) return ev.concat(this.finalRun || this.finalOnly ? this._finishFinal(true) : this._win());
         // 第三層から: the skipped floors are paid back only when the run gets this far
         if (sc && sc.bossEmbers) { this._gainEmbers(sc.bossEmbers, 'shortcut'); ev.push({ t: 'embers', amount: sc.bossEmbers, total: this.embers, src: 'shortcut' }); }
-        return ev.concat(this.mods.deepUnlocked && !this.deep ? this._settleBoss() : this._win());
+        // 灰輪の主 beaten: the win is settled now and 灰の底 can be followed at once — the first clear too (G5)
+        return ev.concat(!this.deep ? this._settleBoss() : this._win());
       }
       if (this.deep && this.floor >= D().DEEP_LAST_FLOOR) return ev.concat(this.mods.treeDone ? this._settleDeep() : this._finishDeep(true));
       for (const r of this.reels) {

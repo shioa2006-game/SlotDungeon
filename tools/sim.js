@@ -234,6 +234,7 @@ function doorScore(run, d) {
 }
 function handleBetween(run) {
   if (run.phase === 'descent') { run.chooseDescent(LOG.descend !== false); return; }
+  if (run.phase === 'finalChoice') { run.chooseFinal(false); return; }
   if (run.phase === 'crossroads') {
     let oi = null;
     if (run.offers && run.offers.length) {
@@ -299,7 +300,7 @@ function playRun(profile, opts = {}) {
       if (run.enemy !== fightEnemy) { endFight(); fightEnemy = run.enemy; fightFloor = run.floor; if (LOG.measure) LOG.turn = { dec: 0, acted: 0, t: 0, dmg1: 0, maxHp: run.enemy.maxHp }; }
       fightTurns++;
       playTurn(run, opts.smart !== false);
-    } else { endFight(); handleBetween(run); decisions++; }
+    } else { endFight(); const fc = run.phase === 'finalChoice'; handleBetween(run); if (!fc) decisions++; } // (the bot never takes 最深の間: not a decision)
   }
   endFight();
   const s = run.summary;

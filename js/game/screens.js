@@ -19,18 +19,39 @@
       const first = G.profile.stats.runs === 0;
       const b = U.button(first ? '灯をともす' : '野営地へ', 'primary big', () => {
         if (SD.Audio) { SD.Audio.init(); SD.Audio.play('unlock'); }
+        // a new save: 序の巻 first (once), then the first descent
+        if (first && !G.profile.seen.prologue) { this.playScroll('prologue', {}, () => { G.profile.seen.prologue = true; G.save(); G.setScreen(new RunScreen({ startFloor: 1 })); }); return; }
         if (first) G.setScreen(new RunScreen({ startFloor: 1 }));
         else G.setScreen(new CampScreen());
       });
       box.appendChild(b);
       box.appendChild(U.el('div', 'title-hint', 'クリック または Space'));
+      // the scrolls, to see again (終の巻 once 深淵の繰り手 has been beaten)
+      if (!first || G.profile.seen.prologue) {
+        const row = U.el('div', 'title-scrolls');
+        row.appendChild(U.button('絵巻を見る', 'mini', () => { if (SD.Audio) SD.Audio.init(); this.playScroll('prologue', {}, () => G.setScreen(new TitleScreen())); }));
+        if (G.profile.stats.finalClears > 0) row.appendChild(U.button('終の巻を見る', 'mini', () => { if (SD.Audio) SD.Audio.init(); this.playScroll('epilogue', { records: SD.Scroll.colophon(G.profile) }, () => G.setScreen(new TitleScreen())); }));
+        box.appendChild(row);
+      }
+      this.box = box;
       root.appendChild(box);
       root.appendChild(G.settingsButton());
       if (SD.Audio) SD.Audio.setMusic('title');
     }
-    onKey(e) { if (e.code === 'Space' || e.code === 'Enter') { const b = document.querySelector('.title-box .btn'); if (b) b.click(); } }
-    update(dt) { this.t += dt; }
+    // a scroll over the title (the title's own box steps aside while it plays)
+    playScroll(kind, opts, then) {
+      this.box.style.display = 'none';
+      this.scroll = SD.Scroll.create(kind, Object.assign({}, opts, { onDone: () => { this.scroll = null; then(); } }));
+      this.scroll.mount(UI().root());
+    }
+    onKey(e) {
+      if (this.scroll) { if (e.code === 'Escape') this.scroll.finish(); else this.scroll.input(); return; }
+      if (e.code === 'Space' || e.code === 'Enter') { const b = document.querySelector('.title-box .btn'); if (b) b.click(); }
+    }
+    onMouseDown() { if (this.scroll) this.scroll.input(); }
+    update(dt) { this.t += dt; if (this.scroll) this.scroll.update(dt); }
     render(ctx) {
+      if (this.scroll) { this.scroll.render(ctx); return; }
       const Art = SD.Art;
       if (Art.drawBackground) Art.drawBackground(ctx, 'title', { t: this.t, camX: this.t * 6, W: 1280, H: 720, depth: 0 });
       else { ctx.fillStyle = '#0d0b16'; ctx.fillRect(0, 0, 1280, 720); }
@@ -94,6 +115,86 @@ const TREE_SX = 1.12;
         this.sel = rec ? rec.id : null;
         this.renderDetail();
       }
+      // 灯輪の完成 / B17's notice, once each (a save from before stage 4 that already meets them gets them here)
+      const fs = SD.Meta.finalState(this.profile);
+      if (fs.tree.done && !this.profile.seen.treeComplete) this.startComplete();
+      else if (fs.open && !this.profile.seen.b17Notice) {
+        this.profile.seen.b17Notice = true; G.save();
+        setTimeout(() => { SD.FX.banner('最深の間への道が開かれた', { sub: '出発のマスの4つ目「最深の間へ」から挑める', size: 48, y: 160, life: 3.2 }); if (SD.Audio) SD.Audio.play('relic'); }, 600);
+      }
+    }
+
+    // ------------------------------------------------------------------ 灯輪の完成 (docs/EXPANSION_4A_SPEC.md §8.1)
+    // The last 灯紋: the nodes light one by one from the centre outwards (0.08 s each), the lines after them, the wheel
+    // glows, a chord of bells; then three vertical lines. Any input shows it all, the next one closes it.
+    startComplete() {
+      const p = this.profile, fs = SD.Meta.finalState(p);
+      p.seen.treeComplete = true;
+      if (fs.open) p.seen.b17Notice = true;
+      SD.Game.save();
+      const order = SD.Data.SKILLS.slice().sort((a, b) => (a.r - b.r) || (a.a - b.a));
+      const at = {}; order.forEach((n, i) => { at[n.id] = 0.4 + i * 0.08; });
+      const seqEnd = 0.4 + order.length * 0.08;
+      const cols = fs.keeper ? ['すべての灯紋が灯った。', '灯輪は、最後の運命を指し示す。', '――最深の間への道が開かれた。']
+        : ['すべての灯紋が灯った。', '灯輪は、最後の運命を指し示す。', '灯輪は完成した。だが、', '深淵の最奥へ至る道は、まだ閉ざされている。'];
+      this.complete = { t: 0, at, seqEnd, cols, colAt: cols.map((c, i) => seqEnd + 0.6 + i * 0.9), sounded: false, ticks: 0 };
+      this.complete.end = this.complete.colAt[cols.length - 1] + 1.2;
+      for (const el of [this.left, this.right, this.desc, this.top]) if (el) { el.style.transition = 'opacity 0.6s'; el.style.opacity = '0'; el.style.pointerEvents = 'none'; }
+      if (SD.Audio) SD.Audio.duck(0.75, this.complete.end + 1);
+    }
+    advanceComplete() {
+      const c = this.complete;
+      if (c.t < c.end) { c.t = c.end; if (!c.sounded && SD.Audio) { c.sounded = true; SD.Audio.play('tree_complete'); } return; }
+      this.complete = null;
+      for (const el of [this.left, this.right, this.desc, this.top]) if (el) { el.style.opacity = '1'; el.style.pointerEvents = ''; }
+      this.refresh();
+    }
+    drawComplete(ctx) {
+      const c = this.complete, Art = SD.Art, C = TREE_C, t = c.t;
+      // the lines light after the nodes they join
+      for (const n of SD.Data.SKILLS) for (const rq of n.req) {
+        const m = SD.Data.SKILL_BY_ID[rq]; if (!m) continue;
+        const k = t - Math.max(c.at[n.id], c.at[rq]);
+        if (k < 0 || k > 0.6) continue;
+        const a = nodePos(n), b = nodePos(m);
+        ctx.save(); ctx.globalAlpha = 1 - k / 0.6; ctx.strokeStyle = '#fff6d8'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x + (a.x - b.x) * Math.min(1, k / 0.25), b.y + (a.y - b.y) * Math.min(1, k / 0.25)); ctx.stroke(); ctx.restore();
+      }
+      // each node blooms as it lights
+      for (const n of SD.Data.SKILLS) {
+        const k = t - c.at[n.id];
+        if (k < 0 || k > 0.8) continue;
+        const q = nodePos(n);
+        Art.glow(ctx, q.x, q.y, 40 + 60 * k, BRANCH_COL[n.branch], 1 - k / 0.8);
+      }
+      // the wheel: glowing, its rays turning
+      const g = Math.max(0, Math.min(1, (t - c.seqEnd) / 1.0));
+      if (g > 0) {
+        Art.glow(ctx, C.x, C.y, 260 + 60 * Math.sin(t * 3), 'rgba(255,214,120,0.9)', 0.55 * g);
+        ctx.save(); ctx.translate(C.x, C.y); ctx.rotate(t * 0.6); ctx.globalAlpha = 0.35 * g;
+        for (let k = 0; k < 16; k++) { ctx.rotate(Math.PI / 8); ctx.fillStyle = '#ffe1a0'; ctx.fillRect(40, -2, 300, 4); }
+        ctx.restore();
+        ctx.save(); ctx.globalAlpha = 0.12 * g; ctx.fillStyle = '#ffdca0'; ctx.fillRect(0, 0, 1280, 720); ctx.restore(); // (the light of the camp rises a step)
+      }
+      // three vertical lines, right to left
+      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+      c.cols.forEach((str, i) => {
+        const a = Math.max(0, Math.min(1, (t - c.colAt[i]) / 0.6));
+        if (a <= 0) return;
+        const x = 1190 - i * 52, size = 26;
+        ctx.globalAlpha = a; ctx.font = `900 ${size}px ${SD.Game.fontTitle}`;
+        [...str].forEach((ch, j) => {
+          const y = 70 + j * (size + 3);
+          ctx.save(); ctx.translate(x, y);
+          if (ch === '―' || ch === 'ー') ctx.rotate(Math.PI / 2);
+          if (ch === '、' || ch === '。') ctx.translate(size * 0.35, -size * 0.35);
+          ctx.lineWidth = 5; ctx.strokeStyle = '#1a1222'; ctx.strokeText(ch, 0, 0);
+          ctx.fillStyle = i === 2 && c.cols.length === 3 ? '#ffd257' : '#fff6d8'; ctx.fillText(ch, 0, 0);
+          ctx.restore();
+        });
+      });
+      if (t >= c.end) { ctx.globalAlpha = 0.6 + 0.3 * Math.sin(t * 3); ctx.font = `700 14px ${SD.Game.fontUI}`; ctx.fillStyle = '#efe5cf'; ctx.fillText('クリックで閉じる', C.x, 700); }
+      ctx.restore();
     }
 
     refresh() {
@@ -116,7 +217,9 @@ const TREE_SX = 1.12;
         <div class="rec"><span>前回</span><b>B${s.lastFloor || 0}</b></div>
         <div class="rec"><span>三連</span><b>${s.triples}</b></div>
         <div class="rec"><span>ボス最高</span><b>${s.bossKills ? '討伐 ' + s.bossKills + '回' : best}</b></div>` +
-        (s.deepRuns ? `<div class="rec"><span>灰の底</span><b>最深 B${s.deepBest}</b></div><div class="rec"><span>踏破／挑戦</span><b>${s.deepClears || 0} / ${s.deepRuns}</b></div>` : '');
+        (s.deepRuns ? `<div class="rec"><span>灰の底</span><b>最深 B${s.deepBest}</b></div><div class="rec"><span>踏破／挑戦</span><b>${s.deepClears || 0} / ${s.deepRuns}</b></div>` : '') +
+        (s.finalRuns || SD.Meta.finalState(p).open ? `<div class="rec final"><span>真のクリア</span><b>${s.finalClears ? s.finalClears + ' 回' : '—'}</b></div>` +
+          (s.finalClears ? `<div class="rec sub"><span>初めて ${s.firstFinalClear || '—'}</span><b>最少 ${s.finalBestTurns} ターン</b></div>` : '') : '');
       const recN = SD.Meta.recommendedNode(p, p.seen.lastWhisper);
       if (recN) {
         const g = recN;
@@ -161,12 +264,22 @@ const TREE_SX = 1.12;
         const S = SD.Data.SHORTCUTS[13];
         cell(13, '灰の底から', `B13・刻印${S.carvings}+遺物${S.relics}`, `<b>灰の底（B13）から</b><br>支度：刻印${S.carvings}＋遺物${S.relics}<br>灰の底だけの挑戦。本編の記録（挑戦・勝利など）は付かない`, 'deep');
       }
+      // the 4th start: 最深の間へ once B17 is open; until then a veiled cell with its two conditions (the last goal, in view)
+      if (has(17)) {
+        const S = SD.Data.SHORTCUTS[17];
+        cell(17, '最深の間へ', `B17・刻印${S.carvings}+遺物${S.relics}`, `<b>最深の間（B17）へ</b><br>支度：刻印${S.carvings}＋遺物${S.relics}を選んで、深淵の繰り手に挑む<br>最深の間だけの挑戦。ほかの記録（挑戦・勝利など）は付かない`, 'final');
+      } else {
+        const fs = SD.Meta.finalState(this.profile);
+        const v = U.el('div', 'btn secondary sc locked', '？？？ <small>まだ閉ざされている</small>');
+        U.bindTip(v, `<b>？？？</b><br>${fs.tree.done ? '✓' : '・'} すべての灯紋を灯す（${fs.tree.lit} / ${fs.tree.all}）<br>${fs.keeper ? '✓' : '・'} 灰の底の${SD.UI.deepEliteName()}を倒す`);
+        grid.appendChild(v);
+      }
       this.desc.appendChild(grid);
     }
 
     nodeState(n) {
       const p = this.profile;
-      if (p.unlocked[n.id]) return 'owned';
+      if (p.unlocked[n.id]) return this.complete && this.complete.t < (this.complete.at[n.id] || 0) ? 'dim' : 'owned';
       if (SD.Meta.isReachable(p, n.id)) return p.embers >= n.cost ? 'afford' : 'reach';
       // silhouette if any prerequisite is reachable (one ring of fog)
       if (n.req.some((r) => SD.Meta.isReachable(p, r))) return 'fog';
@@ -203,6 +316,7 @@ const TREE_SX = 1.12;
       const p = this.profile;
       if (!SD.Meta.unlock(p, id)) { if (SD.Audio) SD.Audio.play('ui_deny'); return; }
       SD.Game.save();
+      if (SD.Meta.treeState(p).done && !p.seen.treeComplete) { this.refresh(); this.startComplete(); return; }
       if (SD.Audio) SD.Audio.play('unlock');
       const n = SD.Data.SKILL_BY_ID[id], pos = nodePos(n);
       SD.FX.burst(pos.x, pos.y, 40, { color: [BRANCH_COL[n.branch], '#fff6d8', '#ffd257'], kind: 'star', speed: 360 });
@@ -229,6 +343,7 @@ const TREE_SX = 1.12;
       SD.Game.canvas.style.cursor = h ? 'pointer' : 'default';
     }
     onMouseDown(x, y) {
+      if (this.complete) { this.advanceComplete(); return; }
       const h = this.hitNode(x, y);
       if (!h) return;
       if (this.sel === h && SD.Meta.canUnlock(this.profile, h)) { this.unlock(h); return; }
@@ -236,9 +351,20 @@ const TREE_SX = 1.12;
       if (SD.Audio) SD.Audio.play('ui_click');
     }
     onKey(e) {
+      if (this.complete) { this.advanceComplete(); return; }
       if (e.code === 'Space' || e.code === 'Enter') { const b = this.desc.querySelector('.btn'); if (b) b.click(); }
     }
-    update(dt) { this.t += dt; for (const b of this.burst) b.t += dt; this.burst = this.burst.filter((b) => b.t < 1.5); }
+    update(dt) {
+      this.t += dt; for (const b of this.burst) b.t += dt; this.burst = this.burst.filter((b) => b.t < 1.5);
+      const c = this.complete;
+      if (c) {
+        const t0 = c.t; c.t += dt;
+        // a soft tick every few nodes as they light; the chord of bells when the wheel glows
+        const lit = (tt) => Math.floor(Math.max(0, tt - 0.4) / 0.08);
+        if (SD.Audio && c.t < c.seqEnd && lit(c.t) !== lit(t0) && lit(c.t) % 3 === 0) SD.Audio.play('ember', { vol: 0.5 });
+        if (!c.sounded && c.t >= c.seqEnd) { c.sounded = true; if (SD.Audio) SD.Audio.play('tree_complete'); }
+      }
+    }
 
     render(ctx) {
       const Art = SD.Art, t = this.t;
@@ -287,7 +413,7 @@ const TREE_SX = 1.12;
           const m = SD.Data.SKILL_BY_ID[rq]; if (!m) continue;
           if (this.nodeState(m) === 'hidden') continue;
           const b = nodePos(m);
-          const lit = p.unlocked[n.id] && p.unlocked[rq];
+          const lit = this.nodeState(n) === 'owned' && this.nodeState(m) === 'owned';
           const live = !p.unlocked[n.id] && p.unlocked[rq];
           ctx.save();
           const bridge = n.branch === 'bridge' || m.branch === 'bridge' && m.id !== 'core';
@@ -345,6 +471,7 @@ const TREE_SX = 1.12;
         const n = SD.Data.SKILL_BY_ID[b.id], q = nodePos(n);
         Art.glow(ctx, q.x, q.y, 60 + b.t * 100, BRANCH_COL[n.branch], Math.max(0, 1 - b.t / 1.5));
       }
+      if (this.complete) this.drawComplete(ctx);
     }
   }
 
@@ -1406,6 +1533,32 @@ const TREE_SX = 1.12;
       m.appendChild(box);
     }
 
+    // 灰鐘の番人 beaten with B17 open: the 灰の底 result is written to the profile now (once); then 帰還 / 最深の間へ
+    onDeepSettled(summary, firstOpen) {
+      const G = SD.Game, p = this.profile;
+      this.settledDeepRes = summary.deepOnly ? SD.Meta.applyDeepResult(p, summary) : Object.assign({}, this.settledRes || {}, SD.Meta.applyDeepResult(p, summary));
+      this.deepSettled = true;
+      if (firstOpen) p.seen.b17Notice = true; // (B17 opened with this very kill: this choice is its notice)
+      G.save();
+      const U = UI();
+      this.state = 'modal';
+      if (this.dom.right) this.dom.right.style.visibility = 'hidden';
+      this.renderLeft();
+      this.refreshButtons();
+      const m = this.dom.modal;
+      m.innerHTML = ''; m.classList.add('show');
+      const box = U.el('div', 'event-box descent-box final');
+      box.appendChild(U.el('div', 'event-glyph', '糸'));
+      box.appendChild(U.el('div', 'event-name', `${SD.UI.deepEliteName()}を討った`));
+      box.appendChild(U.el('div', 'event-text', (firstOpen ? '<b>――最深の間への道が開かれた。</b><br>' : '') + '灰の底の踏破は記録した（残り火も保存済み）。<br>その下に、<b>最深の間</b>がある。'));
+      const opts = U.el('div', 'event-opts');
+      const go = (down) => { if (this.run.phase !== 'finalChoice') return; const evs = this.run.chooseFinal(down); this.closeModal(); this.play(evs); };
+      opts.appendChild(U.button('最深の間へ降りる<small>B17 深淵の繰り手。焚き火で休んでから挑む。倒れても、ここまでの記録は失わない</small>', 'event-opt', () => go(true)));
+      opts.appendChild(U.button('帰還する<small>ここで降下を終える</small>', 'event-opt', () => go(false)));
+      box.appendChild(opts);
+      m.appendChild(box);
+    }
+
     onRunEnd(summary) {
       const G = SD.Game, p = this.profile;
       const settled = !!summary.settled;
@@ -1413,7 +1566,10 @@ const TREE_SX = 1.12;
       const prevBestVs = (p.stats.bestVs || {})[summary.killer ? summary.killer.id : ''];
       // a settled win was applied at the boss: 帰還 adds nothing, a descent adds only what it gained
       let res;
-      if (summary.deepOnly) res = SD.Meta.applyDeepResult(p, summary); // 灰の底から: the main-game record is untouched
+      // 最深の間: only the B17 part is new (what came before it was written when it was settled)
+      if (summary.final) res = Object.assign({}, summary.finalOnly ? {} : this.settledDeepRes || {}, SD.Meta.applyFinalResult(p, summary, new Date().toISOString().slice(0, 10)));
+      else if (this.deepSettled) res = this.settledDeepRes || {}; // (帰還 after the 灰の底 was settled: nothing more)
+      else if (summary.deepOnly) res = SD.Meta.applyDeepResult(p, summary); // 灰の底から: the main-game record is untouched
       else if (!settled) res = SD.Meta.applyRunResult(p, summary);
       else if (summary.deep) res = Object.assign({}, this.settledRes || {}, SD.Meta.applyDeepResult(p, summary));
       else res = this.settledRes || {};
@@ -1422,6 +1578,13 @@ const TREE_SX = 1.12;
       this.refreshButtons();
       this.scene.curtainTarget = 1;
       this.fadePanels();
+      if (summary.final && summary.final.won) {
+        // 終の巻: the long one the first time, scenes 2-5 after that; the result comes after it
+        const short = !!p.seen.epilogue;
+        p.seen.epilogue = true; G.save();
+        setTimeout(() => this.playScroll('epilogue', { short, records: SD.Scroll.colophon(p) }, () => this.showEndPanel(summary, res, prev, prevBestVs)), 600);
+        return;
+      }
       setTimeout(() => this.showEndPanel(summary, res, prev, prevBestVs), summary.won ? 400 : 900);
     }
 
@@ -1472,6 +1635,13 @@ const TREE_SX = 1.12;
       return g ? { node: g.id, text: '次の灯紋が、次の降下を変える', dataDriven: false } : null;
     }
 
+    // a scroll over the run's screen (終の巻): the HUD steps aside; input goes to the scroll until it is done
+    playScroll(kind, opts, then) {
+      for (const el of [document.querySelector('.run-top'), this.dom.goal, this.dom.relics]) if (el) el.style.display = 'none';
+      this.scroll = SD.Scroll.create(kind, Object.assign({}, opts, { onDone: () => { this.scroll = null; then(); } }));
+      this.scroll.mount(UI().root());
+    }
+
     // the curtain comes down over the stage: the side panels go with it (not after it)
     fadePanels() {
       for (const el of [this.dom.left, this.dom.right]) {
@@ -1500,11 +1670,31 @@ const TREE_SX = 1.12;
           kb.innerHTML = `<div class="k-name">${k.name}</div><div class="k-bar"><div class="k-fill" style="width:${Math.round(k.hpPct * 100)}%"></div></div><div class="k-left">残り <b>${k.hp}</b> / ${k.maxHp}</div>`;
           box.appendChild(kb);
         }
-      } else if (summary.won && summary.floor === SD.Data.FINAL_FLOOR) {
-        // 深淵の繰り手 (stage 4b stand-in: the 真のクリア record, 終の巻 and the ending come in stage 4d)
-        box.appendChild(U.el('div', 'end-title win', '深淵の繰り手を討った'));
-        box.appendChild(U.el('div', 'end-sub', '糸は断たれた。運命は、三人の手に。'));
-        box.appendChild(U.el('div', 'win-note deep', '（段階4bの仮の画面。真のクリアの記録と終の巻は段階4dで作る）'));
+      } else if (summary.final) {
+        // 深淵の繰り手: 真のクリア, or a fall at 最深の間 (what came before it stays)
+        const f = summary.final, st = p.stats;
+        if (f.won) {
+          box.appendChild(U.el('div', 'end-title win', '深淵の繰り手を討った'));
+          box.appendChild(U.el('div', 'end-sub', '糸は断たれた。運命は、三人の手に。'));
+          const tree = SD.Meta.treeState(p);
+          const grid = U.el('div', 'win-grid');
+          const cell = (k, v) => grid.appendChild(U.el('div', 'win-cell', `<span>${k}</span><b>${v}</b>`));
+          cell('真のクリア', `${st.finalClears} 回目`);
+          cell('この戦い', `${f.turns} ターン`);
+          cell('最少', `${st.finalBestTurns} ターン`);
+          cell('灯した灯紋', `${tree.lit} / ${tree.all}`);
+          box.appendChild(grid);
+          if (res.firstTrueClear) box.appendChild(U.el('div', 'win-note final', '<b>真のクリア。</b>灯輪は、もう誰の糸にも繋がれていない。'));
+        } else {
+          box.appendChild(U.el('div', 'end-title', '最深の間で灯が消えた'));
+          box.appendChild(U.el('div', 'end-sub', summary.finalOnly ? '最深の間からの挑戦。ほかの記録には付かない。' : '灰の底までの記録は、そのまま残る。'));
+          const k = summary.killer;
+          if (k) {
+            const kb = U.el('div', 'killer');
+            kb.innerHTML = `<div class="k-name">${k.name}</div><div class="k-bar"><div class="k-fill" style="width:${Math.round(k.hpPct * 100)}%"></div></div><div class="k-left">残り <b>${k.hp}</b> / ${k.maxHp}</div>`;
+            box.appendChild(kb);
+          }
+        }
       } else if (summary.won) {
         box.appendChild(U.el('div', 'end-title win', '灰輪の主を討った'));
         box.appendChild(U.el('div', 'end-sub', '灯輪は再び正しく廻り始めた。けれど深淵の灯は、まだ呼んでいる。'));
@@ -1533,7 +1723,7 @@ const TREE_SX = 1.12;
         }
       }
       const rec = U.el('div', 'records');
-      if (summary.deepOnly) { /* 灰の底 only: no main-game depth chip */ }
+      if (summary.deepOnly || summary.finalOnly) { /* 灰の底 / 最深の間 only: no main-game depth chip */ }
       else if (res.newBestFloor) rec.appendChild(U.el('span', 'chip new', `最深記録 B${summary.floor}`));
       else rec.appendChild(U.el('span', 'chip', `最深 B${p.stats.bestFloor}`));
       if (res.firstDeepRun) rec.appendChild(U.el('span', 'chip new', '近道「灰の底から」が開いた'));
@@ -1543,6 +1733,8 @@ const TREE_SX = 1.12;
       if (res.newDeepBest) rec.appendChild(U.el('span', 'chip new', `灰の底 最深 B${summary.floor}`));
       if (res.firstDeepClear) rec.appendChild(U.el('span', 'chip new', '灰の底 初踏破'));
       if (res.firstDeepElite) rec.appendChild(U.el('span', 'chip new', `${SD.UI.deepEliteName()} 初撃破`));
+      if (res.firstTrueClear) rec.appendChild(U.el('span', 'chip new final', '真のクリア'));
+      else if (res.newBestTurns) rec.appendChild(U.el('span', 'chip new', `最少 ${summary.final.turns} ターン`));
       if (!summary.deep && summary.floor > prev.last && prev.last > 0) rec.appendChild(U.el('span', 'chip up', `前回より ${summary.floor - prev.last} 階深く`));
       if (summary.stats.triples) rec.appendChild(U.el('span', 'chip', `三連 ${summary.stats.triples}`));
       box.appendChild(rec);
@@ -1599,15 +1791,18 @@ const TREE_SX = 1.12;
       }
       const btns = U.el('div', 'end-btns');
       const deepRetry = !!summary.deep && SD.Meta.computeMods(p).shortcuts.indexOf(13) >= 0;
+      const finalRetry = !!summary.final && SD.Meta.computeMods(p).shortcuts.indexOf(17) >= 0;
       let lead = null;
-      if (primaryAction) lead = U.button(primaryAction.label + ' <kbd>Space</kbd>', 'primary big', primaryAction.fn, { silent: true });
+      if (finalRetry && !summary.final.won) lead = U.button('最深の間から再挑戦 <small>B17・新しい支度から</small>', 'primary big', () => G.setScreen(new RunScreen({ startFloor: 17 })), { silent: true });
+      else if (primaryAction) lead = U.button(primaryAction.label + ' <kbd>Space</kbd>', 'primary big', primaryAction.fn, { silent: true });
       else if (deepRetry) lead = U.button('灰の底から再挑戦 <small>B13・新しい支度から</small>', 'primary big', () => G.setScreen(new RunScreen({ startFloor: 13 })), { silent: true });
       const camp = U.button('灯紋の輪へ', lead ? 'secondary' : 'primary big', () => G.setScreen(new CampScreen()));
       if (lead) btns.appendChild(lead);
       btns.appendChild(camp);
       this.endPrimary = lead || camp;
       // a 灰の底-only fall that already leads with 灰の底から再挑戦 needs no second retry button
-      if (fell && (primaryAction || !summary.deepOnly)) {
+      if (finalRetry && summary.final.won) btns.appendChild(U.button('もう一度 最深の間へ', 'mini', () => G.setScreen(new RunScreen({ startFloor: 17 }))));
+      if (fell && !summary.final && (primaryAction || !summary.deepOnly)) {
         const sf = this.defaultStart();
         btns.appendChild(U.button(summary.deepOnly ? `すぐ再挑戦（B${sf}から）` : 'すぐ再挑戦', 'mini', () => G.setScreen(new RunScreen({ startFloor: sf }))));
       }
@@ -1627,6 +1822,7 @@ const TREE_SX = 1.12;
 
     // ------------------------------------------------------------------ input
     onKey(e) {
+      if (this.scroll) { if (e.code === 'Escape') this.scroll.finish(); else this.scroll.input(); return; }
       if (this.state === 'end') {
         if ((e.code === 'Space' || e.code === 'Enter') && this.endPrimary && performance.now() > (this.endInputLock || 0)) this.endPrimary.click();
         return;
@@ -1803,6 +1999,7 @@ const TREE_SX = 1.12;
     }
 
     onMouseDown(x, y) {
+      if (this.scroll) { this.scroll.input(); return; }
       if (this.modalOpen) return;
       if (this.state === 'end') return;
       const h = this.reels.hit(x, y);
@@ -1878,6 +2075,7 @@ const TREE_SX = 1.12;
 
     // ------------------------------------------------------------------ loop
     update(dt) {
+      if (this.scroll) this.scroll.update(dt);
       this.scene.update(dt);
       this.reels.update(dt);
       this.joy = Math.max(0, (this.joy || 0) - dt * 1.3);
@@ -1936,6 +2134,7 @@ const TREE_SX = 1.12;
       this.scene.drawZoneTitle(ctx);
       SD.FX.drawOverlay(ctx, 1280, 720);
       SD.StageDraw.drawCurtain(ctx, this.scene.curtain, this.scene.time);
+      if (this.scroll) this.scroll.render(ctx); // (終の巻, over everything)
     }
   }
 

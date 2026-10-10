@@ -324,6 +324,16 @@ small { font-size: 0.78em; opacity: 0.85; }
 .camp-descend .btn.sc { padding: 6px 6px; font-size: 15px; }
 .camp-descend .btn.sc small { display: block; margin: 1px 0 0; font-size: 11px; }
 .camp-descend .btn.sc.deep { border-color: #8a8aa0; }
+/* 最深の間 (B17): the 4th start — gold once open; veiled ("？？？") until both conditions are met */
+/* 絵巻: 「とばす」 over the scroll; the title's 「絵巻を見る」 */
+.scroll-skip { position: absolute; right: 22px; top: 18px; z-index: 30; }
+.title-scrolls { margin-top: 10px; display: flex; gap: 8px; justify-content: center; }
+.camp-descend .btn.sc.final { border-color: #e8bf6a; box-shadow: 0 0 10px rgba(232,191,106,0.35); }
+.camp-descend .btn.sc.locked { opacity: 0.55; cursor: default; border-style: dashed; text-align: center; }
+.rec.final b { color: #ffd257; }
+.rec.sub span, .rec.sub b { font-size: 11px; color: var(--bone-dim); }
+.win-note.final { border-color: #e8bf6a; }
+.chip.final { border-color: #e8bf6a; color: #ffd257; }
 
 /* ---------------------------------------------------------------- title */
 .title-box { position: absolute; left: 0; right: 0; top: 100px; text-align: center; pointer-events: auto; }

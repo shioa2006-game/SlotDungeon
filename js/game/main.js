@@ -138,6 +138,9 @@
     const raw = Math.min(0.05, Math.max(0, (ts - last) / 1000 || 0));
     last = ts;
     let dt = raw * Game.timeScale();
+    // the play clock (in the profile; written with its next save). Not while the page is hidden, nor in a test entrance
+    const ck = Game.profile && Game.profile.clock;
+    if (ck && !Game.testMode && !(typeof document !== 'undefined' && document.hidden)) { ck.sec = (ck.sec || 0) + raw; if (!ck.since) ck.since = new Date().toISOString().slice(0, 10); }
     // hit-stop: freeze the world briefly
     if (SD.FX.hitstop > 0) { SD.FX.hitstop -= raw; dt = dt * 0.05; }
     Game.time += dt;
@@ -181,6 +184,31 @@
       Game.profile = p;
       Game.save = () => false;
     }
+    // stage 4d test entrance (?test=camp): the camp with one 灯紋 left to light (灯輪の完成), the B16 elite beaten unless
+    // &keeper=0 (then the closed line, and 最深の間へ stays veiled). In memory only, like ?test=b17.
+    // stage 4d test entrance (?test=emaki): the title with both scrolls to see (序の巻 / 終の巻), in memory only
+    if (test === 'emaki') {
+      Game.testMode = true;
+      Game.testOpts = { title: true, act: 1 };
+      const p = SD.Meta.newProfile();
+      for (const s of SD.Data.SKILLS) p.unlocked[s.id] = true;
+      Object.assign(p.stats, { runs: 40, wins: 3, bossKills: 3, deepRuns: 6, finalRuns: 2, finalClears: 1, finalBestTurns: 9, totalEmbers: 5200, eliteKills: { bellkeeper: 1 } });
+      p.clock = { sec: 9 * 3600 + 12 * 60, fromStart: true, since: '2026-10-04' };
+      p.seen = { prologue: true, epilogue: true };
+      Game.profile = p;
+      Game.save = () => false;
+    }
+    if (test === 'camp') {
+      Game.testMode = true;
+      Game.testOpts = { camp: true, act: 1 };
+      const p = SD.Meta.newProfile();
+      for (const s of SD.Data.SKILLS) p.unlocked[s.id] = s.id !== 'keeper';
+      Object.assign(p.stats, { runs: 40, wins: 3, bossKills: 3, bestFloor: 16, deepRuns: 3, deepBest: 16, deepClears: 1, eliteKills: q.get('keeper') === '0' ? { bellhound: 3, abbot: 3, ashlord: 3 } : { bellhound: 3, abbot: 3, ashlord: 3, bellkeeper: 1 } });
+      p.embers = 200;
+      p.seen = { band: true, nudge: true, respin: true, bless: true, echo: true, key: true, script: true, borrow: true, comboPause: true };
+      Game.profile = p;
+      Game.save = () => false;
+    }
     resize();
     window.addEventListener('resize', resize);
     const firstGesture = () => { if (SD.Audio) { SD.Audio.init(); applyVolume(); } };
@@ -201,8 +229,8 @@
     // wait briefly for web fonts, then start
     const start = () => {
       const T = Game.testOpts;
-      Game.setScreen(Game.testMode ? new SD.Screens.RunScreen({ startFloor: SD.Data.FINAL_FLOOR, act: T.act,
-        kit: T.pick ? { carvings: 6, relics: 3 } : { carvings: 10, relics: 6, auto: true } }) : new SD.Screens.TitleScreen());
+      Game.setScreen(Game.testMode && T.title ? new SD.Screens.TitleScreen() : Game.testMode && T.camp ? new SD.Screens.CampScreen({ focus: 'keeper' }) : Game.testMode ? new SD.Screens.RunScreen({ startFloor: SD.Data.FINAL_FLOOR, act: T.act,
+        kit: { auto: !T.pick } }) /* (the kit itself is 最深の間へ's: SHORTCUTS[17]) */ : new SD.Screens.TitleScreen());
       requestAnimationFrame(frame);
     };
     if (document.fonts && document.fonts.load) {

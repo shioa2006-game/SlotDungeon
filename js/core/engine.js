@@ -106,8 +106,14 @@
           this.deepOnly = true;
           this.settled = { embers: 0, depth: this._depthEmbers(this.startFloor), stats: Object.assign({}, this.stats), elites: 0, summary: null };
         }
+        // 最深の間へ: a B17-only run (no main-game / 灰の底 record: Meta.applyFinalResult only)
+        if (sc.finalOnly) {
+          this.finalOnly = true;
+          this.settledFinal = { embers: 0, stats: Object.assign({}, this.stats), summary: null };
+        }
         const sev = { t: 'shortcut', floor: this.startFloor, embers: sc.embers };
         if (sc.postClear) Object.assign(sev, { label: sc.label, bossEmbers: sc.bossEmbers || 0, deepOnly: !!sc.deepOnly }); // (B5's event is unchanged)
+        if (sc.finalOnly) sev.finalOnly = true;
         ev.push(sev);
       }
       if (this.mods.chiselStart > 0) return ev.concat(this._beginChisel(this.mods.chiselStart, 'remove', 'start'));
@@ -1758,13 +1764,13 @@
       this.lastFightTurns = this.fight.turn + 1;
       if (e.boss) {
         this.bossHpPct = 0;
-        // 深淵の繰り手: the true final boss ends the run as won (the 真のクリア record and the ending come in stage 4d)
-        if (D().ENEMIES[e.id].final) return ev.concat(this._win());
+        // 深淵の繰り手: the true final boss ends the run as won (its record: Meta.applyFinalResult)
+        if (D().ENEMIES[e.id].final) return ev.concat(this.finalRun || this.finalOnly ? this._finishFinal(true) : this._win());
         // 第三層から: the skipped floors are paid back only when the run gets this far
         if (sc && sc.bossEmbers) { this._gainEmbers(sc.bossEmbers, 'shortcut'); ev.push({ t: 'embers', amount: sc.bossEmbers, total: this.embers, src: 'shortcut' }); }
         return ev.concat(this.mods.deepUnlocked && !this.deep ? this._settleBoss() : this._win());
       }
-      if (this.deep && this.floor >= D().DEEP_LAST_FLOOR) return ev.concat(this._finishDeep(true));
+      if (this.deep && this.floor >= D().DEEP_LAST_FLOOR) return ev.concat(this.mods.treeDone ? this._settleDeep() : this._finishDeep(true));
       for (const r of this.reels) {
         const keep = r.strip[r.pos];
         r.strip = r.strip.filter((c) => !c.temp);
@@ -1797,6 +1803,7 @@
         if (e.boss) { this.bossHpPct = pct; this._gainEmbers(Math.floor((1 - pct) * 60), 'fight'); }
         else if (e.elite) this._gainEmbers(Math.floor((1 - pct) * e.ember * 0.6), 'fight');
       }
+      if (this.finalRun || this.finalOnly) return ev.concat(this._finishFinal(false)); // fallen at 最深の間: what came before stays
       if (this.deep) return ev.concat(this._finishDeep(false)); // fallen in 灰の底: the run stays won
       this._finish(false);
       ev.push({ t: 'runEnd', summary: this.summary });
@@ -1878,6 +1885,53 @@
       return (cleared ? [{ t: 'deepCleared' }] : []).concat([{ t: 'runEnd', summary: sum }]);
     }
   }
+
+  // ================================================================== 最深の間 (B17, docs/EXPANSION_4A_SPEC.md §7)
+  // The B16 elite beaten with every 灯紋 lit: if the elite has now been beaten (before, or just now) B17 is open — the 灰の底
+  // result is settled here (the UI writes it at once) and 帰還 / 最深の間へ is asked; else the descent simply ends.
+  Run.prototype._settleDeep = function () {
+    const b16 = D().FLOORS[D().DEEP_LAST_FLOOR].enemy;
+    if (!(this.mods.keeperKilled || this.eliteKills.indexOf(b16) >= 0)) return this._finishDeep(true);
+    const ev = this._finishDeep(true); // [deepCleared, runEnd] — the same summary as when the descent just ends
+    const end = ev.pop();
+    this.phase = 'finalChoice';
+    this.settledFinal = { embers: this.embers, stats: Object.assign({}, this.stats), summary: end.summary };
+    return ev.concat([{ t: 'deepSettled', summary: end.summary, firstOpen: !this.mods.keeperKilled }]);
+  };
+  // false: 帰還 (the settled result, nothing more). true: 最深の間へ — a campfire, then B17.
+  Run.prototype.chooseFinal = function (go) {
+    if (this.phase !== 'finalChoice') return [];
+    if (!go) { this.phase = 'won'; return [{ t: 'runEnd', summary: this.summary }]; }
+    this.finalRun = true;
+    for (const r of this.reels) {
+      const keep = r.strip[r.pos];
+      r.strip = r.strip.filter((c) => !c.temp);
+      const np = r.strip.indexOf(keep);
+      r.pos = np >= 0 ? np : 0;
+      r.held = false; r.carried = false; r.jam = false; r.echo = null;
+    }
+    this.block = 0;
+    this.enemy = null;
+    this.fight = null;
+    const ev = [{ t: 'descendFinal' }];
+    const d = this._gainSparks(this.mods.sparkPerWin);
+    if (d > 0) ev.push({ t: 'sparks', delta: d, total: this.sparks, max: this.maxSparks, src: 'win' });
+    return ev.concat(this._startEvent('campfire'));
+  };
+  // B17 ends (beaten or fallen). summary.final holds only the B17 part; summary.final.base is what was settled before it
+  // (a run that came on from B16; none for 最深の間へ).
+  Run.prototype._finishFinal = function (won) {
+    const s0 = this.settledFinal, st = this.stats, b = s0.stats;
+    this.phase = won ? 'won' : 'dead';
+    const sum = this._summaryNow(won);
+    if (this.finalOnly) sum.finalOnly = true;
+    sum.final = {
+      won, turns: this.lastFightTurns || (this.fight ? this.fight.turn + 1 : 0), embers: this.embers - s0.embers, base: s0.summary,
+      kills: st.kills - b.kills, triples: (st.triples || 0) - (b.triples || 0), bonds: (st.bonds || 0) - (b.bonds || 0),
+    };
+    this.summary = sum;
+    return (won ? [{ t: 'runWon' }] : []).concat([{ t: 'runEnd', summary: sum }]);
+  };
 
   SD.Run = Run;
 })();

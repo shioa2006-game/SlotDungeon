@@ -76,6 +76,9 @@
     // 灰の底 only (no boss, no main-game record): opens once a 灰の底 run has been finished
     // kit tuned by sim (tools/sim.js entry): with 4 relics 灰の底 clears match the B9 route (+1 pt overall, every build within ±15)
     13: { gateStat: ['deepRuns', 1], carvings: 4, relics: 4, embers: 0, label: '灰の底から', postClear: true, deepOnly: true },
+    // 最深の間へ (B17 only): opens with B17 itself (every 灯紋 lit + the B16 elite beaten). The kit is about what a run that
+    // beat the B16 elite carries (measured: the same win rate as such runs, docs/EXPANSION_4B_PROMISE.md gate B)
+    17: { gateFinal: true, carvings: 10, relics: 6, embers: 0, label: '最深の間へ', postClear: true, finalOnly: true },
   };
 
   // ---------------------------------------------------------------- enemies

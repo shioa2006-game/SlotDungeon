@@ -67,6 +67,91 @@
     }
 
     isFinal() { const e = this.rs.run.enemy; return !!(e && SD.Data.ENEMIES[e.id] && SD.Data.ENEMIES[e.id].final); }
+    // 最深の間: the long entrance and appearance are shown once (then short ones); all of it skips and fast-forwards
+    seenFinal() { const p = SD.Game.profile; return !!(p && p.seen && p.seen.kuriteStage); }
+    markSeenFinal() { const p = SD.Game.profile; if (p && p.seen && !p.seen.kuriteStage) { p.seen.kuriteStage = true; SD.Game.save(); } }
+    // the stage's curtain rises on the empty backstage; the three walk in
+    async deepestEntrance() {
+      const sc = this.rs.scene, long = !this.seenFinal();
+      sc.title = null;
+      sc.curtain = 1; sc.curtainTarget = 1;
+      if (long) await this.wait(0.5);
+      sc.curtainRate = long ? 0.9 : 0; sc.curtainTarget = 0;
+      if (long) {
+        const hs = sc.heroList();
+        for (const h of hs) { h.dx = -320; h.play('walk', 2.0); }
+        for (let k = 0; k <= 32 && !this.skip; k++) { // (skipped: they are simply there)
+          const e = SD.Art.easeOut(k / 32);
+          for (const h of hs) h.dx = -320 * (1 - e);
+          if (k % 6 === 0) this.sfx('step', { vol: 0.4 });
+          await this.wait(0.05);
+        }
+        for (const h of hs) h.dx = 0;
+      }
+      sc.title = { str: SD.Data.ZONES.deepest.name, sub: '最深部 ・ B17', t: 0 };
+      await this.wait(long ? 1.4 : 0.5);
+      sc.curtainRate = 0;
+    }
+    // 深淵の繰り手 appears: four golden strings come down, then the hands, then the eyes open in the dark
+    async kuriteAppears(a, ev) {
+      const rs = this.rs, sc = rs.scene, FX = SD.FX, long = !this.seenFinal();
+      sc.bossDark = 1; a.alpha = 0;
+      if (SD.Audio) SD.Audio.setMusic('kurite', { layer: ev.enemy.phase || 1 });
+      if (long) {
+        sc.drop = { xs: [-84, -28, 28, 84].map((dx) => a.x + dx), k: [0, 0, 0, 0], y: a.y - 199 };
+        for (let i = 0; i < 4; i++) {
+          this.sfx('string_pluck', { pitch: 1 + i * 0.12 });
+          for (let k = 1; k <= 7 && !this.skip; k++) { sc.drop.k[i] = SD.Art.easeOut(k / 7); await this.wait(0.05); }
+        }
+        await this.wait(0.3);
+        this.sfx('lift_winch', { pitch: 0.8 });
+        for (let k = 0; k <= 30 && !this.skip; k++) { a.dy = -280 * (1 - SD.Art.easeOut(k / 30)); a.alpha = Math.min(1, k / 10); await this.wait(0.05); }
+        a.dy = 0; a.alpha = 1; sc.drop = null; // (the hands have taken up the strings)
+        await this.wait(0.4);
+        const mx = a.x, my = a.y - 318;
+        FX.ring(mx, my, { color: '#c58bff', r1: 120 });
+        FX.burst(mx, my, 16, { color: ['#d9c4ff', '#9a6bff'], kind: 'mote', speed: 90, gravity: -20 });
+      } else {
+        for (let k = 0; k <= 10 && !this.skip; k++) { a.alpha = k / 10; await this.wait(0.05); }
+        a.alpha = 1;
+      }
+      if (SD.Audio) { SD.Audio.play('boss_appear'); SD.Audio.duck(0.6, 2); }
+      FX.shake(6);
+      FX.banner(ev.enemy.name, { sub: '四本の糸を断て', size: 60, color: '#e8d0ff', glow: 'rgba(150,90,255,0.6)', life: 2.2, y: 300 });
+      await this.wait(long ? 1.6 : 1.0);
+      sc.bossDark = 0;
+      this.markSeenFinal();
+    }
+    // 決着: the three are freed, the puppeteer falls, the theater gives way — silence, the music box, the curtain
+    async kuriteFinale() {
+      const rs = this.rs, sc = rs.scene, e = sc.enemy, FX = SD.FX;
+      rs.setIntent(null);
+      if (SD.Audio) SD.Audio.setMusic('none');
+      FX.stop(320); FX.flash('rgba(255,240,200,1)', 0.6, 1.2);
+      for (const [k, id] of ['knight', 'witch', 'priest'].entries()) {
+        const p = this.heroFx(id);
+        FX.burst(p.x, p.y - 90, 20, { color: ['#ffd257', '#fff6d8'], speed: 300 });
+        this.heroAt(id).play('cheer', 0.8);
+        this.sfx('string_snap', { pitch: 0.9 + k * 0.12 });
+        await this.wait(0.3);
+      }
+      rs.liftFree = true;
+      if (e) { e.setHold(null); e.play('die', 3.2); }
+      await this.wait(0.9);
+      this.sfx('drop_slam', { vol: 0.8 }); FX.shake(5);
+      await this.wait(0.7);
+      this.sfx('mask_crack');
+      await this.wait(1.4);
+      this.sfx('theater_collapse'); FX.shake(10);
+      for (let k = 0; k <= 24 && !this.skip; k++) { sc.collapse = SD.Art.easeIn(k / 24); await this.wait(0.05); }
+      sc.collapse = 1;
+      await this.wait(0.8); // (silence)
+      this.sfx('music_box');
+      await this.wait(1.6);
+      sc.curtainRate = 0.6; sc.curtainTarget = 1; rs.fadePanels();
+      await this.wait(2.4);
+      sc.curtainRate = 0;
+    }
     // 四本の糸: a hero (or all three) is lifted by the puppeteer
     liftFx(it) {
       const lift = this.rs.run.liftOf ? this.rs.run.liftOf(it) : null;
@@ -75,7 +160,7 @@
       for (const id of ids) { const p = this.heroFx(id); SD.FX.burst(p.x, p.y - 60, 8, { color: ['#ffd257', '#fff6d8'], kind: 'mote', speed: 80, gravity: -30 }); }
       const p = this.heroFx(ids[Math.floor(ids.length / 2)]);
       SD.FX.text(p.x, p.y - 120, `${lift.heroName}が吊り上げられた`, { color: '#ffe1a0', size: 22, vy: -16, life: 1.4 });
-      this.sfx('windup', { pitch: 1.2 });
+      this.sfx('lift_winch');
     }
 
     // ---------------------------------------------------------------- run / room flow
@@ -103,6 +188,7 @@
         const layer = ev.zone === 'cellar' ? '第一層' : ev.zone === 'ossuary' ? '第二層' : ev.zone === 'gearworks' ? '第三層' : ev.zone === 'ashdeep' ? '第四層' : '最深部';
         rs.scene.title = { str: Z.name, sub: `${layer} ・ B${ev.floor}`, t: 0 };
       }
+      if (ev.zone === 'deepest') await this.deepestEntrance();
     }
 
     async on_door(ev) {
@@ -124,10 +210,11 @@
       V.block = ev.block; V.sparks = ev.sparks;
       if (ev.hp != null) { V.hp = ev.hp; V.maxHp = ev.maxHp; }
       rs.intentNow = null;
-      if (ev.enemy.boss) {
+      if (ev.enemy.final) await this.kuriteAppears(a, ev);
+      else if (ev.enemy.boss) {
         rs.scene.bossDark = 1;
         a.alpha = 0;
-        if (SD.Audio) { SD.Audio.setMusic('boss'); SD.Audio.play('boss_appear'); SD.Audio.duck(0.6, 2); }
+        if (SD.Audio) { SD.Audio.setMusic(ev.enemy.final ? 'kurite' : 'boss', ev.enemy.final ? { layer: ev.enemy.phase || 1 } : undefined); SD.Audio.play('boss_appear'); SD.Audio.duck(0.6, 2); }
         SD.FX.shake(6);
         for (let k = 0; k <= 20; k++) { a.alpha = k / 20; await this.wait(0.05); }
         SD.FX.banner(ev.enemy.name, { sub: ev.enemy.final ? '四本の糸を断て' : '封印を三連か絆で砕け。封じたままでは灰輪が加速する', size: 60, color: '#e8d0ff', glow: 'rgba(150,90,255,0.6)', life: 2.2, y: 300 });
@@ -462,13 +549,16 @@
       rs.liftFree = true;
       FX.banners.length = 0; FX.texts.length = 0; // (the combo's banner and numbers step aside: only the snap is read)
       FX.stop(140); FX.shake(9); FX.flash('rgba(255,214,120,1)', 0.45, 2.2);
+      // the string leaves the puppeteer's bar with a flash where it was tied
+      const se = rs.scene.enemy, si = (SD.Data.ENEMIES[rs.run.enemy.id].strings || []).findIndex((s) => s.name === ev.string);
+      if (se && si >= 0) FX.burst(se.x + [-84, -28, 28, 84][si], se.y - 199, 18, { color: ['#ffd257', '#fff6d8'], speed: 260 });
       const ids = ev.hero === 'all' ? ['priest', 'witch', 'knight'] : [ev.hero];
       for (const id of ids) { const p = this.heroFx(id); FX.burst(p.x, p.y - 80, 26, { color: ['#ffd257', '#fff6d8'], speed: 320 }); this.heroAt(id).play('cheer', 0.8); }
       // whose string, and how many are left (the last one: the fight is won)
       const S = SD.Data.ENEMIES[rs.run.enemy.id].strings || [], left = Math.max(0, S.length - 1 - S.findIndex((s) => s.name === ev.string));
       FX.text(640, 200, `${ev.string}を断った！`, { color: '#ffe1a0', size: 44, vy: -8, life: 1.7, sub: ev.last ? '' : `残りの糸 ${left}本` });
       this._snapBeat = !ev.last;
-      this.sfx('seal_break'); this.sfx('combo_bond', { vol: 0.7 });
+      this.sfx('string_snap'); this.sfx('combo_bond', { vol: 0.5 });
       if (ev.dmg > 0) this.dmgEnemy(ev.hp, ev.dmg, { big: true, color: '#ffd257', parts: ['#ffd257', '#fff6d8'] });
       else if (V.enemy) V.enemy.hp = ev.hp;
       await this.wait(1.0);
@@ -595,6 +685,7 @@
       const rs = this.rs, V = this.V(), FX = SD.FX;
       const e = rs.scene.enemy;
       if (e) { e.setHold(null); e.play('attack', 0.5); }
+      if (ev.heavy && this.isFinal()) this.sfx('drop_slam'); // (落とし・終幕: the hands come down on the stage)
       await this.wait(0.2);
       V.hp = ev.hp; V.block = ev.block;
       const heroes = rs.scene.heroList();
@@ -691,6 +782,7 @@
 
     async on_bossPhase(ev) {
       const rs = this.rs;
+      if (this.isFinal()) rs.scene.actK = 0; // (最深の間: the stage and the puppeteer change over the next seconds)
       if (rs.scene.enemy) rs.scene.enemy.phase = ev.phase;
       this.V().enemy.phase = ev.phase;
       this.sfx('boss_phase');
@@ -700,10 +792,15 @@
         const left = S.length - (ev.phase - 1), now = S[ev.phase - 1];
         SD.FX.banner((SD.Data.ENEMIES[rs.run.enemy.id].acts || [])[ev.phase - 1] || '', { sub: `残りの糸 ${left}本（次は${now ? now.name : ''}）・火種が満ちる`, size: 60, color: '#e8d0ff', glow: 'rgba(150,80,255,0.6)', life: 1.8 });
         if (ev.gained) { for (let k = Math.max(0, ev.sparks - ev.gained); k < ev.sparks; k++) rs.reels.flareCandle(k); }
+        // the music grows by an instrument; the valance falls (面の段) / the mask cracks open (終幕の段)
+        if (SD.Audio) SD.Audio.setMusicLayer(ev.phase);
+        if (ev.phase === 2) this.sfx('curtain_fall');
+        else if (ev.phase === 3) { this.sfx('relic', { pitch: 0.8 }); const p = this.enemyFx(); SD.FX.burst(p.x, p.y - 80, 18, { color: ['#fff6d8', '#ffd257'], kind: 'mote', speed: 70, gravity: -25 }); }
+        else if (ev.phase >= 4) { this.sfx('mask_crack'); SD.FX.burst(720, 190, 30, { color: ['#efe5cf', '#e8bf6a', '#9a6bff'], kind: 'chunk', speed: 320 }); SD.FX.shake(12); }
       }
       else SD.FX.banner(ev.phase === 2 ? '逆廻り' : '破滅の秒読み', { sub: ev.phase === 2 ? '封じが巡る。外して殴れ' : '灰燼が来る。盾で受けるか、削り切れ', size: 60, color: '#e8d0ff', glow: 'rgba(150,80,255,0.6)', life: 1.6 });
       if (ev.gained) { this.V().sparks = ev.sparks; rs.reels.flareCandle(ev.sparks - 1); this.sfx('spark_gain'); }
-      await this.wait(1.1);
+      await this.wait(this.isFinal() ? 1.8 : 1.1);
     }
 
     async on_newTurn(ev) {
@@ -721,6 +818,7 @@
 
     // ---------------------------------------------------------------- endings
     async on_enemyDie(ev) {
+      if (SD.Data.ENEMIES[ev.id] && SD.Data.ENEMIES[ev.id].final) return this.kuriteFinale();
       const rs = this.rs, e = rs.scene.enemy;
       this.sfx('enemy_die');
       if (e) { e.setHold(null); e.play('die', 0.8); }
@@ -742,6 +840,21 @@
 
     async on_partyDeath() {
       const rs = this.rs;
+      if (this.isFinal()) {
+        // the three are hung up on the puppeteer's strings, limp like puppets, and the curtain comes down
+        const sc = rs.scene;
+        rs.setIntent(null);
+        if (SD.Audio) SD.Audio.setMusic('none');
+        this.sfx('lift_winch', { pitch: 0.7 });
+        sc.limp = ['priest', 'witch', 'knight'];
+        for (const h of sc.heroList()) h.play('hit', 0.6);
+        await this.wait(1.6);
+        this.sfx('death');
+        sc.curtainRate = 0.8; sc.curtainTarget = 1; rs.fadePanels();
+        await this.wait(1.4);
+        sc.curtainRate = 0;
+        return;
+      }
       for (const h of rs.scene.heroList()) h.play('dead', 0.8);
       rs.setIntent(null);
       this.sfx('death');

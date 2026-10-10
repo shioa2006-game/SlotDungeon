@@ -7,7 +7,9 @@
  *   SD.Audio.play(name, { pitch, vol, n, pan, delay })
  *                                              pitch: multiplier (1) · vol: multiplier (1) · n: index (reel_stop reel 0..3,
  *                                              doom_tick count 3..1) · pan: -1..1 · delay: seconds
- *   SD.Audio.setMusic(track)                   'title'|'camp'|'cellar'|'ossuary'|'gearworks'|'boss'|'victory'|'none'
+ *   SD.Audio.setMusic(track, opts)             'title'|'camp'|'cellar'|'ossuary'|'gearworks'|'boss'|'backstage'|'kurite'|'victory'|'none'
+ *                                              (opts.layer: the starting layer of a layered track)
+ *   SD.Audio.setMusicLayer(n)                  a layered track (kurite) adds its instruments up to layer n (1..4), fading in
  *                                              1.5s crossfade; generative, loops forever.
  *   SD.Audio.setVolume({ master, music, sfx }) 0..1 slider positions (perceptual curve applied). Partial objects OK.
  *                                              Nothing is persisted — the caller stores settings.
@@ -26,8 +28,9 @@
     'hex', 'drain', 'jam', 'mark', 'reflect', 'enemy_heal', 'windup', 'doom_tick',
     'ui_hover', 'ui_click', 'ui_confirm', 'ui_deny', 'unlock', 'ember', 'spark_gain', 'spark_use', 'door', 'step',
     'reward', 'relic', 'second_wind', 'death', 'boss_appear', 'boss_phase', 'victory', 'near_miss', 'clack',
+    'string_pluck', 'string_snap', 'lift_winch', 'drop_slam', 'mask_crack', 'curtain_fall', 'theater_collapse', 'music_box',
   ];
-  const TRACKS = ['title', 'camp', 'cellar', 'ossuary', 'gearworks', 'boss', 'victory', 'none'];
+  const TRACKS = ['title', 'camp', 'cellar', 'ossuary', 'gearworks', 'boss', 'backstage', 'kurite', 'victory', 'none'];
 
   // ------------------------------------------------------------------ config / state
   const SFX_BASE = 0.9;      // sfx bus headroom
@@ -39,7 +42,7 @@
 
   let G = null;              // active graph (main or a temporary offline one during render())
   let mainG = null;          // the realtime graph
-  let pendingTrack = null;
+  let pendingTrack = null, pendingLayer = 1; // (pendingLayer: the layer a layered track starts with)
   let active = 0;            // live sfx voices
   let endT = 0;              // latest end time scheduled by the current voice (for cleanup)
   const lastPlay = {}, burstN = {};
@@ -742,6 +745,71 @@
     }
   });
 
+  // ---- 最深の間 (B17): the puppeteer's strings and the paper theater
+  def('string_pluck', { wet: 0.25, jit: 0.02 }, (o, t, p) => {
+    tone(o, t, 880 * p, 0.6, 0.12, { type: 'triangle', f1: 840 * p, glide: 0.1, lp: 6000, lp1: 1800, lpT: 0.4 });
+    tone(o, t, 1760 * p, 0.3, 0.035);
+    tone(o, t, 3520 * p, 0.08, 0.02, { a: 0.001 });
+  });
+  def('string_snap', { wet: 0.4, pri: 1, jit: 0.02 }, (o, t, p) => {
+    noise(o, t, 0.05, 0.5, { type: 'highpass', f: 2500 });
+    tone(o, t, 1400 * p, 0.12, 0.14, { type: 'triangle', f1: 3600 * p, glide: 0.05 });
+    tone(o, t, 700 * p, 0.35, 0.08, { type: 'triangle', f1: 420 * p, glide: 0.3 }); // the loose end whips back
+    noise(o, t + 0.04, 0.25, 0.12, { type: 'bandpass', f: 4200, f1: 1200, glide: 0.25, q: 2 });
+    thud(o, t, 110 * p, 0.3, 0.3);
+    partials(o, t + 0.02, 1046.5 * p, 0.9, 0.04, P_CHIME);
+  });
+  def('lift_winch', { wet: 0.25, pri: 1, jit: 0.02 }, (o, t, p) => {
+    ratchet(o, t, 12, 0.8, 0.15, 1500 * p);
+    const ac = G.ctx, end = t + 0.85;
+    const src = ac.createOscillator(); src.type = 'sawtooth';
+    src.frequency.setValueAtTime(48 * p, t); src.frequency.linearRampToValueAtTime(96 * p, end);
+    lfo(src.frequency, t, end, 11, 5);
+    const eg = ac.createGain(); env(eg.gain, t, 0.08, 0.2, 0.25, 0.5); eg.connect(o);
+    filt(src, 'bandpass', 900 * p, 7, t).connect(eg);
+    src.start(t); src.stop(end + 0.05); mark(end);
+  });
+  def('drop_slam', { wet: 0.3, pri: 1, jit: 0.02 }, (o, t, p) => {
+    tone(o, t, 62 * p, 0.7, 0.55, { f1: 34 * p, glide: 0.5 });
+    noise(o, t, 0.25, 0.45, { type: 'lowpass', f: 2200, f1: 200, glide: 0.2, buf: 'pink' });
+    noise(o, t, 0.06, 0.3, { type: 'bandpass', f: 1300, q: 3 }); // the wood
+    partials(o, t, 180 * p, 0.5, 0.06, P_PLATE);
+  });
+  def('mask_crack', { wet: 0.35, pri: 1, jit: 0.02 }, (o, t, p) => {
+    for (let i = 0; i < 6; i++) noise(o, t + i * 0.03 + rnd() * 0.02, 0.012, 0.3 * (1 - i * 0.1), { type: 'bandpass', f: 2600 + rnd() * 3000, q: 4 });
+    partials(o, t + 0.05, 1320 * p, 0.6, 0.05, P_GLASS);
+    tone(o, t + 0.05, 330 * p, 0.6, 0.06, { type: 'triangle', f1: 300 * p });
+  });
+  def('curtain_fall', { wet: 0.35, pri: 1, jit: 0.02 }, (o, t, p) => {
+    noise(o, t, 0.9, 0.3, { a: 0.15, type: 'lowpass', f: 1800, f1: 300, glide: 0.9, buf: 'pink' });
+    noise(o, t + 0.85, 0.3, 0.35, { type: 'lowpass', f: 500, buf: 'brown' });
+    thud(o, t + 0.85, 70 * p, 0.4, 0.4);
+  });
+  def('theater_collapse', { wet: 0.45, pri: 1, jit: 0.01 }, (o, t, p) => {
+    for (let i = 0; i < 5; i++) {
+      const tt = t + i * 0.32 + rnd() * 0.08;
+      thud(o, tt, (90 - i * 8) * p, 0.4, 0.35);
+      noise(o, tt, 0.2, 0.3, { type: 'lowpass', f: 1600, f1: 250, glide: 0.2, buf: 'pink' });
+      noise(o, tt, 0.05, 0.2, { type: 'bandpass', f: 1200 + rnd() * 800, q: 3 });
+    }
+    const ac = G.ctx, end = t + 1.4;
+    const src = ac.createOscillator(); src.type = 'sawtooth'; // the frame groans as it goes
+    src.frequency.setValueAtTime(70 * p, t); src.frequency.linearRampToValueAtTime(40 * p, end);
+    lfo(src.frequency, t, end, 7, 6);
+    const eg = ac.createGain(); env(eg.gain, t, 0.2, 0.18, 0.4, 0.8); eg.connect(o);
+    filt(src, 'bandpass', 700 * p, 6, t).connect(eg);
+    src.start(t); src.stop(end + 0.05); mark(end);
+    noise(o, t + 0.2, 1.6, 0.3, { a: 0.4, type: 'lowpass', f: 160, buf: 'brown' });
+  });
+  // the title's theme, once, on a music box (the silence after the last string)
+  def('music_box', { wet: 0.5, pri: 1, jit: 0 }, (o, t, p) => {
+    const sc = SC.aeolian, R = 329.63 * p;
+    for (const [k, deg] of THEME) {
+      const f = R * Math.pow(2, (sc[deg % 7] + 12 * Math.floor(deg / 7)) / 12), tt = t + k * 0.36;
+      tone(o, tt, f, 1.4, 0.06, { a: 0.002 }); tone(o, tt, f * 2, 0.4, 0.006, { a: 0.002 }); tone(o, tt, f * 5.4, 0.06, 0.003, { a: 0.001 });
+    }
+  });
+
   // Mix table: per-SFX gain, balanced from offline metering (short-term loudness). Tiers, at full volume:
   // big moments ≈ -12 dB · combat ≈ -18 dB · device/feedback ≈ -22 dB · UI ≈ -28 dB · ticks/hover/ember ≈ -35 dB peak.
   const MIX = {
@@ -753,6 +821,7 @@
     ui_hover: 1.5, ui_click: 1.6, ui_confirm: 1.6, ui_deny: 1.6, unlock: 2.5, ember: 2, spark_gain: 1.5, spark_use: 3,
     door: 0.8, step: 1.6, reward: 2, relic: 2, second_wind: 1, death: 1.3, boss_appear: 0.85, boss_phase: 1, victory: 1,
     near_miss: 2.5, clack: 2.2,
+    string_pluck: 3.6, string_snap: 3, lift_winch: 5.6, drop_slam: 1, mask_crack: 4, curtain_fall: 1.2, theater_collapse: 0.9, music_box: 1.8,
   };
   Object.keys(MIX).forEach((k) => { if (SFX[k]) SFX[k].v = MIX[k]; });
 
@@ -806,6 +875,8 @@
   }
 
   // ------------------------------------------------------------------ music
+  // the title's theme ([step, scale degree]; 最深の間: the music box, and the puppeteer's 終幕 in minor)
+  const THEME = [[0, 7], [1, 9], [2, 11], [3, 9], [4, 11], [5.5, 10], [7, 7]];
   const SC = {
     aeolian: [0, 2, 3, 5, 7, 8, 10], dorian: [0, 2, 3, 5, 7, 9, 10], ionian: [0, 2, 4, 5, 7, 9, 11],
     phrygian: [0, 1, 3, 5, 7, 8, 10],
@@ -881,7 +952,30 @@
       }
       fl.connect(eg); eg.connect(mNote(inst, false));
     },
+    twang(inst, t, f, g, pan) {      // a plucked string, bending down a little (the puppeteer's strings)
+      const o = mNote(inst, true, pan);
+      tone(o, t, f * 1.03, 0.5, g, { type: 'triangle', a: 0.002, f1: f, glide: 0.08, lp: f * 8, lp1: f * 2, lpT: 0.3 });
+      tone(o, t, f * 2.01, 0.25, g * 0.25, { a: 0.002 });
+      tone(o, t, f * 3.98, 0.08, g * 0.1, { a: 0.001 });
+    },
+    organ(inst, t, freqs, dur, g) {  // drawbar organ: 8' + 4' + 2 2/3', held, with a slow tremulant
+      const o = mNote(inst, true), hold = Math.max(0.1, dur - 0.1);
+      for (const f of freqs) {
+        tone(o, t, f, 0.35, g, { a: 0.05, hold, vib: [5.6, f * 0.004, 0.2] });
+        tone(o, t, f * 2, 0.3, g * 0.5, { a: 0.05, hold });
+        tone(o, t, f * 3, 0.25, g * 0.25, { a: 0.05, hold });
+      }
+    },
+    choir(inst, t, freqs, dur, g) {  // formant voices on 'o'
+      const o = mNote(inst, true);
+      for (const f of freqs) vox(o, t, f, 1.2, g, 'o', { a: 0.6, hold: Math.max(0.2, dur - 1.4) });
+    },
+    lead(inst, t, f, g, pan) {       // the brass lead (終幕の段)
+      brass(mNote(inst, true, pan), t, f, 0.22, g, { a: 0.012, hold: 0.12, bright: 4 });
+    },
   };
+  // how far a layered track's layer k has faded in at time t (0 while it is not reached)
+  function lay(inst, k, t) { return inst.layer >= k ? clamp((t - (inst.layerAt[k] || -99)) / 2.5, 0, 1) : 0; }
   const PV = {
     taiko(inst, t, g, f) { const o = mNote(inst); tone(o, t, f, 0.4, g, { f1: f * 0.62, glide: 0.25 }); noise(o, t, 0.05, g * 0.5, { type: 'lowpass', f: 500, buf: 'pink' }); },
     rim(inst, t, g) { const o = mNote(inst, false, -0.2); noise(o, t, 0.05, g, { type: 'bandpass', f: 1700, q: 2.5 }); tone(o, t, 380, 0.04, g * 0.5); },
@@ -890,6 +984,14 @@
     clank(inst, t, g) { const o = mNote(inst, true, inst.rng() - 0.5); partials(o, t, 300 + inst.rng() * 300, 1.0, g, P_METAL); noise(o, t, 0.02, g * 1.5, { type: 'bandpass', f: 2000, q: 1.5 }); },
     crackle(inst, t, g) { noise(mNote(inst, false, inst.rng() * 1.2 - 0.6), t, 0.004 + rnd() * 0.01, g, { type: 'bandpass', f: 1800 + rnd() * 3500, q: 1.5 }); },
     drip(inst, t, g) { const f = 700 + rnd() * 900; tone(mNote(inst, true, rnd() * 1.4 - 0.7), t, f, 0.07, g, { f1: f * 2.1, glide: 0.035 }); },
+    creak(inst, t, g) {              // a fly rope groaning on its pulley
+      const ac = G.ctx, o = mNote(inst, true, inst.rng() - 0.5), end = t + 0.5;
+      const src = ac.createOscillator(); src.type = 'sawtooth';
+      src.frequency.setValueAtTime(70, t); src.frequency.linearRampToValueAtTime(95, t + 0.2); src.frequency.linearRampToValueAtTime(60, end);
+      const eg = ac.createGain(); env(eg.gain, t, 0.05, g, 0.25, 0.2); eg.connect(o);
+      filt(src, 'bandpass', 1100, 8, t).connect(eg);
+      src.start(t); src.stop(end + 0.05); mark(end);
+    },
   };
 
   /* Track definitions.
@@ -976,6 +1078,46 @@
         if (bar % 4 === 3 && sib >= 6) PV.taiko(inst, t + d.stepDur * 0.5, 0.09, 110);
       },
     },
+    // 最深の間 (B17), before the fight: the backstage — a low drone, a rope creaking now and then, and once, far away,
+    // the title's theme on a music box
+    backstage: {
+      root: 110, scale: SC.aeolian, stepDur: 0.6, bar: 8, chordSteps: 32, prog: [0, 5], vol: 0.9, wet: 0.7,
+      pad: { tones: [0, 4], g: 0.02, cut: 420, saw: 0.15 },
+      arp: { voice: 'box', oct: 2, g: 0, density: 0, rest: 1, patterns: [[null]] },
+      bell: { p: 0.15, g: 0.02 },
+      perc(inst, s, sib, bar, t) {
+        const r = inst.rng;
+        if (r() < 0.05) PV.creak(inst, t + r() * 0.3, 0.05 + r() * 0.04);
+        if (s === 12) for (const [k, deg] of THEME) MV.box(inst, t + k * 0.42, degF(inst.def, deg, 1), 0.03, 0.3);
+      },
+    },
+    // 深淵の繰り手 (B17): one piece that grows by act (SD.Audio.setMusicLayer): ① taiko, a winding bass and plucked
+    // strings ② an organ holds the chords ③ a choir and トト's bell ④ the title's theme in minor, fast, on brass
+    kurite: {
+      root: 164.81, scale: SC.aeolian, stepDur: 0.19, bar: 8, chordSteps: 32, prog: [0, 5, 3, 4], vol: 0.66, wet: 0.32, layers: 4,
+      pad: { tones: [0, 4], g: 0.016, cut: 600, saw: 0.5 },
+      arp: { voice: 'box', oct: 2, g: 0, density: 0, rest: 1, patterns: [[null]] },
+      perc(inst, s, sib, bar, t, cr) {
+        const d = inst.def, r = inst.rng, OST = [0, 0, 7, 0, 0, 1, 0, -1], strong = sib === 0 || sib === 3 || sib === 6;
+        const c0 = cr > 3 ? cr - 7 : cr;
+        MV.bassPluck(inst, t, degF(d, c0 + OST[sib], -1), strong ? 0.07 : 0.045);
+        if (strong) PV.taiko(inst, t, sib === 0 ? 0.2 : 0.13, sib === 0 ? 70 : 82);
+        if (bar % 4 === 3 && sib >= 6) PV.taiko(inst, t + d.stepDur * 0.5, 0.09, 108);
+        if ((sib === 2 || sib === 7) && r() < 0.7) MV.twang(inst, t, degF(d, c0 + (sib === 2 ? 4 : 2), 1), 0.035, sib === 2 ? -0.4 : 0.4);
+        const L2 = lay(inst, 2, t);
+        if (L2 && sib === 0) MV.organ(inst, t, [0, 2, 4].map((k) => wrapF(degF(d, cr + k, 0), d.root * 0.84, d.root * 1.68)), d.bar * d.stepDur, 0.02 * L2);
+        const L3 = lay(inst, 3, t);
+        if (L3 && sib === 0 && bar % 2 === 0) MV.choir(inst, t, [wrapF(degF(d, cr, 1), d.root, d.root * 2), wrapF(degF(d, cr + 2, 1), d.root, d.root * 2)], d.bar * d.stepDur * 2, 0.026 * L3);
+        if (L3 && sib === 0 && r() < 0.5) MV.bell(inst, t + d.stepDur * 4, wrapF(degF(d, cr + 4, 1), d.root, d.root * 2), 0.03 * L3);
+        const L4 = lay(inst, 4, t);
+        if (L4) {
+          // (the theme over each bar; every other bar answers it two degrees lower)
+          for (const [k, deg] of THEME) if (Math.floor(k) === sib) MV.lead(inst, t + (k % 1) * d.stepDur, degF(d, deg - (bar % 2) * 2, 0), 0.04 * L4, (r() - 0.5) * 0.3);
+          if (sib % 2 === 1) PV.taiko(inst, t, 0.06 * L4, 120);
+          PV.shaker(inst, t, (sib % 2 ? 0.012 : 0.02) * L4);
+        }
+      },
+    },
     victory: {
       root: 261.63, scale: SC.ionian, stepDur: 0.28, bar: 8, chordSteps: 8, prog: [0, 3, 4, 0, 5, 3, 1, 4], vol: 0.95, wet: 0.45,
       pad: { tones: [0, 2, 4], g: 0.018, cut: 1200, saw: 0.35 },
@@ -993,7 +1135,7 @@
 
   function makeInst(name, seed) {
     const d = TRACK_DEFS[name], ac = G.ctx;
-    const inst = { name, def: d, step: 0, nextT: 0, rng: makeRng(seed), lfos: [], nodes: [], barPlay: false, pattern: null, motif: null, noteP: 0 };
+    const inst = { name, def: d, step: 0, nextT: 0, rng: makeRng(seed), lfos: [], nodes: [], barPlay: false, pattern: null, motif: null, noteP: 0, layer: d.layers ? 1 : 0, layerAt: [] };
     inst.phase = inst.rng() * 6.283;
     inst.out = ac.createGain(); inst.out.gain.value = 0; inst.out.connect(G.music);
     const wet = ac.createGain(); wet.gain.value = d.wet; inst.out.connect(wet); wet.connect(G.musicRev);
@@ -1071,12 +1213,13 @@
     G = prevG;
     music.timer = setTimeout(schedTick, docHidden() ? 300 : 60);
   }
-  function setMusic(track) {
+  function setMusic(track, opts) {
     track = String(track == null ? 'none' : track);
     if (track !== 'none' && !TRACK_DEFS[track]) return;
     pendingTrack = track;
+    pendingLayer = (opts && opts.layer) || 1;
     if (!mainG) return;
-    if (track === music.name) return;
+    if (track === music.name) { if (opts && opts.layer) setMusicLayer(opts.layer); return; }
     const ac = mainG.ctx, now = ac.currentTime;
     if (music.cur) {
       const old = music.cur, gp = old.out.gain;
@@ -1088,12 +1231,23 @@
     if (track === 'none') return;
     const prevG = G; G = mainG;
     const inst = makeInst(track, hash(track) + (music.plays++) * 7919);
+    if (inst.def.layers) inst.layer = clamp(pendingLayer, 1, inst.def.layers); // (the layers it starts with are already in)
     G = prevG;
     inst.out.gain.setValueAtTime(0, now);
     inst.out.gain.linearRampToValueAtTime(inst.def.vol, now + FADE);
     inst.nextT = now + 0.1;
     music.cur = inst;
     if (music.timer == null) music.timer = setTimeout(schedTick, 0);
+  }
+
+  // a layered track: bring in its instruments up to layer n (each new layer fades in over a few seconds)
+  function setMusicLayer(n) {
+    pendingLayer = n | 0 || 1;
+    const inst = music.cur;
+    if (!inst || !inst.def.layers || !mainG) return;
+    const L = clamp(n | 0, 1, inst.def.layers), now = mainG.ctx.currentTime;
+    for (let k = inst.layer + 1; k <= L; k++) inst.layerAt[k] = now;
+    inst.layer = L;
   }
 
   // ------------------------------------------------------------------ public API
@@ -1148,6 +1302,7 @@
         const name = w.slice(6), d = TRACK_DEFS[name];
         if (d) {
           const inst = makeInst(name, hash(name));
+          if (d.layers) inst.layer = clamp(opts.layer | 0 || 1, 1, d.layers);
           inst.out.gain.value = d.vol;
           for (let s = 0, t = 0.02; t < secs; s++, t += d.stepDur) trackStep(inst, s, t);
         }
@@ -1160,7 +1315,7 @@
   }
 
   SD.Audio = {
-    init, play, setMusic, setVolume, duck, render,
+    init, play, setMusic, setMusicLayer, setVolume, duck, render,
     isReady: () => !!mainG,
     getVolume: () => ({ master: vol.master, music: vol.music, sfx: vol.sfx }),
     getMusic: () => (mainG ? music.name : pendingTrack || 'none'),

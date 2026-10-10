@@ -41,7 +41,7 @@
     // 第四層 (after the boss, once the game has been cleared): enemies keep their listed numbers (no depth scaling)
     ashdeep:   { id: 'ashdeep',   name: '灰の底',         music: 'gearworks', floors: [13, 16], deep: true },
     // B17 (stage 4, docs/EXPANSION_4A_SPEC.md): the true final boss's room. Reached only from the stage 4d entrances.
-    deepest:   { id: 'deepest',   name: '最深の間',       music: 'boss',      floors: [17, 17], deep: true },
+    deepest:   { id: 'deepest',   name: '最深の間',       music: 'backstage',      floors: [17, 17], deep: true },
   };
   const FLOORS = {
     1:  { zone: 'cellar', type: 'normal', pool: ['rat', 'slime'] },

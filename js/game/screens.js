@@ -1421,6 +1421,7 @@ const TREE_SX = 1.12;
       this.state = 'end';
       this.refreshButtons();
       this.scene.curtainTarget = 1;
+      this.fadePanels();
       setTimeout(() => this.showEndPanel(summary, res, prev, prevBestVs), summary.won ? 400 : 900);
     }
 
@@ -1469,6 +1470,14 @@ const TREE_SX = 1.12;
       if (cands.length) return cands[0];
       const g = SD.Meta.nextGoals(p, 1)[0];
       return g ? { node: g.id, text: '次の灯紋が、次の降下を変える', dataDriven: false } : null;
+    }
+
+    // the curtain comes down over the stage: the side panels go with it (not after it)
+    fadePanels() {
+      for (const el of [this.dom.left, this.dom.right]) {
+        if (!el) continue;
+        el.style.transition = 'opacity 0.8s'; el.style.opacity = '0'; el.style.pointerEvents = 'none';
+      }
     }
 
     showEndPanel(summary, res, prev, prevBestVs) {

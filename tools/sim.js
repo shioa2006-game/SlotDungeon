@@ -513,10 +513,11 @@ if (mode === 'run1') {
     run.begin();
     run.hp = Math.round(run.maxHp * 0.8);
     let g = 0;
-    while (run.phase !== 'dead' && run.phase !== 'won' && g++ < 3000) {
+    // (灰輪の主 beaten: 'descent' — the choice to go on into 灰の底 — is the win here, as 'won' was before G5)
+    while (run.phase !== 'dead' && run.phase !== 'won' && run.phase !== 'descent' && g++ < 3000) {
       if (run.phase === 'idle') playTurn(run, kit !== 'spin' && !process.env.NOMANIP); else handleBetween(run);
     }
-    if (run.phase === 'won') wins++; else if (run.killer) hpLeft.push(run.killer.hpPct);
+    if (run.phase === 'won' || run.phase === 'descent') wins++; else if (run.killer) hpLeft.push(run.killer.hpPct);
   }
   hpLeft.sort((x, y) => x - y);
   console.log(`boss kit=${kit}: win ${(wins / n * 100).toFixed(1)}%  median boss hp left on loss ${hpLeft.length ? (hpLeft[hpLeft.length >> 1] * 100).toFixed(0) + '%' : '-'}`);
@@ -538,7 +539,7 @@ if (mode === 'run1') {
         let g = 0;
         const e = run.enemy;
         while (run.enemy === e && run.phase === 'idle' && g++ < 80) { playTurn(run, true); turns++; }
-        if (run.phase === 'won' || (run.enemy !== e && run.phase !== 'dead')) wins++;
+        if (run.phase === 'won' || run.phase === 'descent' || (run.enemy !== e && run.phase !== 'dead')) wins++;
         sends += run.stats.advances;
       }
       const tally = {};

@@ -22,11 +22,24 @@
     c.save(); c.globalCompositeOperation = 'source-over'; c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2); c.restore();
   }
   function flame(c, x, y, s, t) { if (SD.Art && SD.Art.flame) SD.Art.flame(c, x, y, s, t); else { c.beginPath(); c.arc(x, y - s * 0.6, s * 0.5, 0, TAU); c.fillStyle = '#ff9a3c'; c.fill(); } }
-  // a hero / the puppeteer as an ink silhouette (the game's own art, cut from black paper)
-  function silhouette(c, draw, x, y, k, alpha) {
-    c.save(); c.translate(x, y); c.scale(k, k);
-    c.filter = `brightness(0) opacity(${alpha == null ? 0.92 : alpha})`;
-    draw(c);
+  // a hero / the puppeteer as an ink silhouette (the game's own art, cut from black paper). The art is drawn on a small
+  // canvas of its own and filled with ink there (source-in), then laid on the scroll: a canvas `filter` costs a whole
+  // layer per stroke (about 1 s a hero), which made the scroll crawl. box: the art's extent around its feet (art units)
+  const HERO_BOX = { x: -120, y: -215, w: 240, h: 255 }, KURITE_BOX = { x: -210, y: -600, w: 500, h: 670 };
+  const cut = { cv: null, c: null };
+  function silhouette(c, draw, x, y, k, alpha, box) {
+    box = box || HERO_BOX;
+    const m = c.getTransform(), s = Math.hypot(m.a, m.b) * k; // (device pixels per art unit)
+    const w = Math.ceil(box.w * s), h = Math.ceil(box.h * s);
+    if (w < 1 || h < 1) return;
+    if (!cut.cv) { cut.cv = document.createElement('canvas'); cut.c = cut.cv.getContext('2d'); }
+    if (cut.cv.width < w || cut.cv.height < h) { cut.cv.width = Math.max(cut.cv.width, w); cut.cv.height = Math.max(cut.cv.height, h); }
+    const o = cut.c;
+    o.setTransform(1, 0, 0, 1, 0, 0); o.globalAlpha = 1; o.globalCompositeOperation = 'source-over'; o.clearRect(0, 0, w, h);
+    o.save(); o.setTransform(s, 0, 0, s, -box.x * s, -box.y * s); draw(o); o.restore();
+    o.globalCompositeOperation = 'source-in'; o.fillStyle = INK; o.fillRect(0, 0, w, h); o.globalCompositeOperation = 'source-over';
+    c.save(); c.translate(x, y); c.scale(k, k); c.globalAlpha *= alpha == null ? 0.92 : alpha;
+    c.drawImage(cut.cv, 0, 0, w, h, box.x, box.y, box.w, box.h);
     c.restore();
   }
   const hero = (c, id, x, y, k, t, pose) => silhouette(c, (cc) => SD.Art.drawHero(cc, id, pose || 'idle', { t, p: 0.3 }), x, y, k);
@@ -127,7 +140,7 @@
       c.save(); c.beginPath(); c.rect(x0 + W * (1 - k), BAND.y, W * k + 2, BAND.h); c.clip();
       c.beginPath(); c.rect(x0, BAND.y, W, BAND.h); fillInk(c, 0.1);
       ground(c, x0, W, GY);
-      silhouette(c, (cc) => SD.Art.drawEnemy(cc, 'kurite', 'idle', { t: 0, phase: 4, cut: 4 }), x0 + W * 0.66, GY + 10, 0.9);
+      silhouette(c, (cc) => SD.Art.drawEnemy(cc, 'kurite', 'idle', { t: 0, phase: 4, cut: 4 }), x0 + W * 0.66, GY + 10, 0.9, null, KURITE_BOX);
       ['priest', 'witch', 'knight'].forEach((id, i) => hero(c, id, x0 + W * (0.16 + i * 0.09), GY + 2, 0.85, t + i, 'cheer'));
       // four gold strings, each broken in two
       for (let i = 0; i < 4; i++) {

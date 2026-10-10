@@ -875,6 +875,13 @@
     async on_runEnd(ev) { this.rs.onRunEnd(ev.summary); }
     // 灰の底
     async on_bossSettled(ev) { this.rs.onBossSettled(ev.summary); }
+    // 最深の間: the B16 elite beaten with B17 open — the 灰の底 result is written now; then 帰還 / 最深の間へ
+    async on_deepSettled(ev) { this.rs.onDeepSettled(ev.summary, ev.firstOpen); }
+    async on_descendFinal() {
+      SD.FX.flash('rgba(5,3,10,1)', 1.25, 2.2, false);
+      SD.FX.banner('最深の間へ', { sub: '灰の底の記録は保存した。焚き火の先で、深淵の繰り手が待つ', size: 50, life: 2.4 });
+      await this.wait(1.4);
+    }
     async on_descend() {
       SD.FX.flash('rgba(5,3,10,1)', 1.25, 2.2, false);
       SD.FX.banner('灰の底へ', { sub: '勝利は確定している。重ね殻と返し鏡が待つ', size: 50, life: 2.4 });

@@ -7,7 +7,8 @@
  *   SD.Audio.play(name, { pitch, vol, n, pan, delay })
  *                                              pitch: multiplier (1) · vol: multiplier (1) · n: index (reel_stop reel 0..3,
  *                                              doom_tick count 3..1) · pan: -1..1 · delay: seconds
- *   SD.Audio.setMusic(track, opts)             'title'|'camp'|'cellar'|'ossuary'|'gearworks'|'boss'|'backstage'|'kurite'|'victory'|'none'
+ *   SD.Audio.setMusic(track, opts)             'title'|'camp'|'cellar'|'ossuary'|'gearworks'|'boss'|'backstage'|'kurite'|'victory'|
+ *                                              'emaki'|'emaki_dawn'|'none'
  *                                              (opts.layer: the starting layer of a layered track)
  *   SD.Audio.setMusicLayer(n)                  a layered track (kurite) adds its instruments up to layer n (1..4), fading in
  *                                              1.5s crossfade; generative, loops forever.
@@ -29,8 +30,9 @@
     'ui_hover', 'ui_click', 'ui_confirm', 'ui_deny', 'unlock', 'ember', 'spark_gain', 'spark_use', 'door', 'step',
     'reward', 'relic', 'second_wind', 'death', 'boss_appear', 'boss_phase', 'victory', 'near_miss', 'clack',
     'string_pluck', 'string_snap', 'lift_winch', 'drop_slam', 'mask_crack', 'curtain_fall', 'theater_collapse', 'music_box',
+    'tree_complete',
   ];
-  const TRACKS = ['title', 'camp', 'cellar', 'ossuary', 'gearworks', 'boss', 'backstage', 'kurite', 'victory', 'none'];
+  const TRACKS = ['title', 'camp', 'cellar', 'ossuary', 'gearworks', 'boss', 'backstage', 'kurite', 'victory', 'emaki', 'emaki_dawn', 'none'];
 
   // ------------------------------------------------------------------ config / state
   const SFX_BASE = 0.9;      // sfx bus headroom
@@ -801,6 +803,13 @@
     src.start(t); src.stop(end + 0.05); mark(end);
     noise(o, t + 0.2, 1.6, 0.3, { a: 0.4, type: 'lowpass', f: 160, buf: 'brown' });
   });
+  // 灯輪の完成: every 灯紋 lit — a chord of bells over a low drone, glints rising (not the purchase's sound)
+  def('tree_complete', { wet: 0.5, pri: 1, jit: 0 }, (o, t, p) => {
+    [261.63, 329.63, 392, 523.25].forEach((f, i) => partials(o, t + i * 0.12, f * p, 3.2, 0.05, P_BELL));
+    partials(o, t + 0.6, 1046.5 * p, 2.4, 0.04, P_CHIME);
+    sparkle(o, t + 0.5, 14, 2.0, 0.02, 1046.5 * p, 1);
+    tone(o, t, 130.81 * p, 3, 0.12, { a: 0.4, type: 'triangle', lp: 700 });
+  });
   // the title's theme, once, on a music box (the silence after the last string)
   def('music_box', { wet: 0.5, pri: 1, jit: 0 }, (o, t, p) => {
     const sc = SC.aeolian, R = 329.63 * p;
@@ -822,6 +831,7 @@
     door: 0.8, step: 1.6, reward: 2, relic: 2, second_wind: 1, death: 1.3, boss_appear: 0.85, boss_phase: 1, victory: 1,
     near_miss: 2.5, clack: 2.2,
     string_pluck: 3.6, string_snap: 3, lift_winch: 5.6, drop_slam: 1, mask_crack: 4, curtain_fall: 1.2, theater_collapse: 0.9, music_box: 1.8,
+    tree_complete: 1.2,
   };
   Object.keys(MIX).forEach((k) => { if (SFX[k]) SFX[k].v = MIX[k]; });
 
@@ -1115,6 +1125,32 @@
           for (const [k, deg] of THEME) if (Math.floor(k) === sib) MV.lead(inst, t + (k % 1) * d.stepDur, degF(d, deg - (bar % 2) * 2, 0), 0.04 * L4, (r() - 0.5) * 0.3);
           if (sib % 2 === 1) PV.taiko(inst, t, 0.06 * L4, 120);
           PV.shaker(inst, t, (sib % 2 ? 0.012 : 0.02) * L4);
+        }
+      },
+    },
+    // 絵巻 (序の巻・終の巻): the title's theme on a music box over a slow pad
+    emaki: {
+      root: 164.81, scale: SC.aeolian, stepDur: 0.5, bar: 8, chordSteps: 16, prog: [0, 5, 3, 4], vol: 0.95, wet: 0.65,
+      pad: { tones: [0, 2, 4], g: 0.018, cut: 600, saw: 0.2 },
+      arp: { voice: 'box', oct: 2, g: 0, density: 0, rest: 1, patterns: [[null]] },
+      bell: { p: 0.25, g: 0.024 },
+      perc(inst, s, sib, bar, t) {
+        if (bar % 2 === 0) for (const [k, deg] of THEME) if (Math.floor(k) === sib) MV.box(inst, t + (k % 1) * inst.def.stepDur, degF(inst.def, deg, 1), 0.035, 0.2);
+      },
+    },
+    // the end of 終の巻: the same theme in major, with every instrument (dawn over the camp)
+    emaki_dawn: {
+      root: 164.81, scale: SC.ionian, stepDur: 0.42, bar: 8, chordSteps: 16, prog: [0, 3, 4, 0, 5, 3, 1, 4], vol: 0.95, wet: 0.5,
+      pad: { tones: [0, 2, 4], g: 0.02, cut: 1100, saw: 0.3 },
+      arp: { voice: 'pluck', oct: 0, g: 0.034, density: 0.7, rest: 0.1, pass: 0.05, spread: 0.5,
+        patterns: [[0, 2, 4, 2, 3, 4, 5, 4], [0, null, 2, 3, null, 4, 3, 2]] },
+      bell: { p: 0.4, g: 0.026 },
+      pulse: { steps: [0, 4], g: 0.06 },
+      perc(inst, s, sib, bar, t) {
+        for (const [k, deg] of THEME) if (Math.floor(k) === sib) {
+          const tt = t + (k % 1) * inst.def.stepDur;
+          MV.box(inst, tt, degF(inst.def, deg, 1), 0.03, 0.2);
+          if (bar % 2 === 0) MV.lead(inst, tt, degF(inst.def, deg, 0), 0.02, 0);
         }
       },
     },

@@ -18,7 +18,7 @@ for (const f of ['util', 'data', 'meta', 'engine']) require(path.join(__dirname,
 const SD = globalThis.SD;
 const N = +process.argv[2] || 3000;
 const R = SD.Util.makeRng(4242);
-const VALID = new Set(['descent', 'chisel', 'crossroads', 'event', 'idle', 'spun', 'dead', 'won']);
+const VALID = new Set(['descent', 'finalChoice', 'chisel', 'crossroads', 'event', 'idle', 'spun', 'dead', 'won']);
 let fails = 0, phases = {}, events = {}, actions = {}, checks = {};
 const count = (k) => { checks[k] = (checks[k] || 0) + 1; };
 

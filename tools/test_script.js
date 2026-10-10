@@ -951,6 +951,69 @@ function unit() {
     ok(rp && Ts.strikeHp === rp.hp && Ts.strikeHp === 200 - Rs.reaper && oldEst === 200, `死神 through a shell: 発動後 ${Ts.strikeHp} (exact), where the old estimate said ${oldEst}`);
   }
 
+  section('最深の間 (stage 4d): B17 opens with every 灯紋 and the B16 elite; 帰還 / 最深の間へ; 真のクリア');
+  {
+    const M = SD.Meta, ALLS = D.SKILLS.map((s) => s.id);
+    const p = M.newProfile();
+    eq(M.finalState(p).open, false, 'a new profile: B17 closed');
+    for (const id of ALLS) p.unlocked[id] = true;
+    const fs1 = M.finalState(p);
+    eq([fs1.tree.done, fs1.tree.all, fs1.keeper, fs1.open], [true, D.SKILLS.length - 1, false, false], 'every 灯紋 lit, counted from the tree (all but the centre): still closed without the B16 elite');
+    ok(M.computeMods(p).shortcuts.indexOf(17) < 0, '...and 最深の間へ is not a start');
+    p.stats.eliteKills.abbot_deep = 3;
+    eq(M.finalState(p).open, false, 'the stage 3a stand-in elite never counts');
+    p.stats.eliteKills.bellkeeper = 1;
+    ok(M.finalState(p).open && M.computeMods(p).shortcuts.indexOf(17) >= 0, 'both met: B17 is open and 最深の間へ is a start');
+    delete p.unlocked[ALLS[ALLS.length - 1]];
+    ok(!M.finalState(p).open && M.computeMods(p).shortcuts.indexOf(17) < 0, 'one 灯紋 short: closed again');
+    // the B16 elite beaten in a 灰の底 run
+    const atB16 = (extra, all) => {
+      const r = fightRun(SD, all === false ? ALLS.slice(0, -1) : ALLS, 'bellkeeper', 16, { profile: (q) => { q.stats.wins = 1; if (extra) extra(q); } });
+      r.deep = { order: D.DEEP_PAIR.slice() }; r.deepOnly = true;
+      r.settled = { embers: 0, depth: r._depthEmbers(13), stats: Object.assign({}, r.stats), elites: 0, summary: null };
+      return r;
+    };
+    const kill = (r) => { const e = r.enemy; e.hp = 1; e.block = 0; r.spin(); const mk = e.now && e.now.k === 'mark' ? e.now.sym : null; const s = mk === 'blade' ? 'flame' : 'blade'; setPayline(r, [s, s, s]); return r.resolve(); };
+    const r0 = atB16(null, false), ev0 = kill(r0);
+    ok(r0.phase === 'won' && ev0.some((x) => x.t === 'runEnd') && !ev0.some((x) => x.t === 'deepSettled'), 'one 灯紋 short: the B16 elite ends the descent as before');
+    const r1 = atB16((q) => { q.stats.eliteKills.bellkeeper = 1; }), ev1 = kill(r1);
+    const ds = ev1.find((x) => x.t === 'deepSettled');
+    ok(r1.phase === 'finalChoice' && ev1.some((x) => x.t === 'deepCleared') && ds && !ds.firstOpen && !ev1.some((x) => x.t === 'runEnd'), 'B17 open: the 灰の底 result is settled, 帰還 / 最深の間へ is asked');
+    const r2 = atB16(null), ev2 = kill(r2);
+    ok(r2.phase === 'finalChoice' && ev2.find((x) => x.t === 'deepSettled').firstOpen, 'B17 opens with this very kill (every 灯紋 lit first): asked too, as its notice');
+    const S1 = ds.summary;
+    const evh = r1.chooseFinal(false);
+    ok(r1.phase === 'won' && evh.length === 1 && evh[0].t === 'runEnd' && evh[0].summary === S1 && S1.deepOnly && S1.deep.cleared, '帰還: the run ends with the settled 灰の底 summary (as it always did)');
+    // 最深の間へ: a campfire, then B17
+    const r3 = atB16((q) => { q.stats.eliteKills.bellkeeper = 1; }); kill(r3);
+    const evd = r3.chooseFinal(true);
+    ok(evd[0].t === 'descendFinal' && r3.phase === 'event' && r3.event && r3.finalRun, '最深の間へ: a campfire first');
+    r3.chooseEvent(r3.event.options[0].id);
+    for (let g = 0; g < 10 && r3.phase === 'crossroads'; g++) r3.choose(null, 0);
+    ok(r3.floor === D.FINAL_FLOOR && r3.enemy && r3.enemy.id === 'kurite', '...then B17, 深淵の繰り手');
+    const k = r3.enemy; k.hp = 1; k.phase = 4; k.phaseFor = 4; k.phaseAt = 0; k.cursor = 0; k.intent = r3._readCell(k);
+    r3.spin(); setPayline(r3, ['blade', 'blade', 'blade']);
+    const evw = r3.resolve(), end = evw.find((x) => x.t === 'runEnd');
+    ok(r3.phase === 'won' && evw.some((x) => x.t === 'runWon') && end && end.summary.final && end.summary.final.won && !!(end.summary.final.base && end.summary.final.base.deepOnly), 'B17 beaten: the run is won; summary.final holds the B17 part, its base the settled 灰の底 summary');
+    const pr = M.newProfile(); for (const id of ALLS) pr.unlocked[id] = true; pr.stats.eliteKills.bellkeeper = 1;
+    const e0 = pr.embers, res = M.applyFinalResult(pr, end.summary, '2026-10-10');
+    ok(res.firstTrueClear && pr.stats.finalClears === 1 && pr.stats.finalRuns === 1 && pr.stats.firstFinalClear === '2026-10-10' && pr.stats.finalBestTurns === end.summary.final.turns && pr.embers === e0 + end.summary.final.embers, '真のクリア: counted once, with its first date, its turns and only the B17 embers');
+    eq([pr.stats.runs, pr.stats.wins, pr.stats.deepRuns], [0, 0, 0], '...and nothing else (the parts before it were written when they were settled)');
+    // 最深の間へ (the camp start): a B17-only run with its own kit
+    const pc = profileWith(SD, ALLS, (q) => { q.stats.wins = 1; q.stats.eliteKills.bellkeeper = 1; });
+    const rc = new SD.Run(M.computeMods(pc), { seed: 5, startFloor: D.FINAL_FLOOR });
+    const evc = rc.begin();
+    eq([rc.finalOnly, rc.pending.length + (rc.phase === 'crossroads' ? 1 : 0), evc.find((x) => x.t === 'shortcut').finalOnly], [true, D.SHORTCUTS[17].carvings + D.SHORTCUTS[17].relics, true], '最深の間へ: a B17-only run, the kit chosen first (10 carvings + 6 relics)');
+    // a fall at 最深の間 (a B17-only run): counted as such, nothing else
+    const rf = fightRun(SD, ALLS, 'kurite', D.FINAL_FLOOR, { hp: 1, profile: (q) => { q.stats.wins = 1; q.stats.eliteKills.bellkeeper = 1; } });
+    rf.finalOnly = true; rf.settledFinal = { embers: 0, stats: Object.assign({}, rf.stats), summary: null }; rf.secondWindUsed = true;
+    rf.spin(); setPayline(rf, ['lantern', 'lantern', 'lantern']);
+    const endF = rf.resolve().find((x) => x.t === 'runEnd');
+    ok(rf.phase === 'dead' && endF && endF.summary.finalOnly && !endF.summary.final.won, 'fallen at 最深の間: the run ends, summary.final.won false');
+    const pf = M.newProfile(), resF = M.applyFinalResult(pf, endF.summary, '2026-10-10');
+    eq([pf.stats.finalRuns, pf.stats.finalFalls, pf.stats.finalClears, pf.stats.firstFinalClear, pf.stats.runs, pf.stats.deaths, !!resF.firstTrueClear], [1, 1, 0, null, 0, 0, false], '...a fall at 最深の間 only (no main-game death)');
+  }
+
   section('深淵の繰り手「四本の糸」: the HP bar is four strings; on 吊り上げ the lifted hero\'s 三連 snaps the string');
   {
     const K = D.ENEMIES.kurite;

@@ -38,7 +38,7 @@
     if (!a.visible || a.alpha <= 0.01) return;
     const Art = SD.Art;
     const cur = a.current();
-    const opts = { t: t + a.t0, p: cur.p, mood: a.mood, enraged: a.enraged, variant: a.variant, phase: a.phase, seals: a.seals };
+    const opts = { t: t + a.t0, p: cur.p, mood: a.mood, enraged: a.enraged, variant: a.variant, phase: a.phase, seals: a.seals, actK: a.actK };
     const info = a.info();
     // ground shadow
     ctx.save();
@@ -91,15 +91,23 @@
       this.title = null;     // zone title card { str, sub, t }
       this.curtain = 0;      // 0 = up (hidden) .. 1 = fully down
       this.curtainTarget = 0;
+      this.curtainRate = 0;  // (0: the usual speed; a staging may lower or raise it slowly)
+      this.actK = 1;         // 最深の間: how far the act change has gone (0 -> 1 over ~1.8 s)
+      this.collapse = 0;     // 最深の間: the proscenium falling at the finale (0 -> 1)
+      this.limp = null;      // 最深の間: heroes hung up like puppets when the party falls (ids)
+      this.drop = null;      // 最深の間: golden strings coming down from the flies { xs, k[], y } (the puppeteer's entrance)
       this.bossDark = 0;
     }
 
     heroList() { return [this.heroes.priest, this.heroes.witch, this.heroes.knight]; }
+    act() { return this.enemy ? this.enemy.phase || 1 : 1; } // (最深の間 is drawn by the boss's act)
 
     setEnemy(snap) {
       if (!snap) { this.enemy = null; return; }
       const pos = snap.boss ? BOSS_POS : ENEMY_POS;
-      const a = new Actor('enemy', snap.art, pos.x, pos.y, { variant: snap.variant, enraged: snap.dread });
+      const dx = SD.Art.enemyInfo(snap.art).stageDx || 0; // (an art may stand a little aside on the stage)
+      const a = new Actor('enemy', snap.art, pos.x + dx, pos.y, { variant: snap.variant, enraged: snap.dread });
+      this.actK = 1; this.collapse = 0; this.limp = null; this.drop = null;
       a.phase = snap.phase || 1; a.seals = snap.seals || 0;
       this.enemy = a;
       return a;
@@ -111,7 +119,9 @@
       if (this.enemy) this.enemy.update(dt);
       this.camX += (this.camTarget - this.camX) * Math.min(1, dt * 2.2);
       if (this.title) { this.title.t += dt; if (this.title.t > 2.0) this.title = null; }
-      this.curtain += (this.curtainTarget - this.curtain) * Math.min(1, dt * (this.curtainTarget > this.curtain ? 4.2 : 3));
+      this.curtain += (this.curtainTarget - this.curtain) * Math.min(1, dt * (this.curtainRate || (this.curtainTarget > this.curtain ? 4.2 : 3)));
+      if (this.actK < 1) this.actK = Math.min(1, this.actK + dt / 1.8);
+      if (this.enemy) this.enemy.actK = this.actK;
       if (Math.abs(this.curtain - this.curtainTarget) < 0.002) this.curtain = this.curtainTarget;
     }
 
@@ -120,14 +130,7 @@
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, 1280, 446); ctx.clip();
       if (Art.drawBackground) {
-        Art.drawBackground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth });
-        if (this.zone === 'deepest') { // 最深の間 (stage 4b stand-in)
-          ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.6; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
-          ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.42; ctx.fillStyle = '#1a0a24'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
-          ctx.save(); ctx.globalAlpha = 0.14; ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1;
-          for (let k = 0; k < 18; k++) { const x = 80 + k * 66 + Math.sin(k * 7.3) * 20; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + Math.sin(this.time * 0.4 + k) * 6, 446); ctx.stroke(); }
-          ctx.restore();
-        }
+        Art.drawBackground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth, act: this.act(), actK: this.actK, collapse: this.collapse });
         if (this.zone === 'ashdeep') { // 灰の底: the same ruins, drained to ash
           ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.globalAlpha = 0.75; ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 1280, 446);
           ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.18; ctx.fillStyle = '#1a1820'; ctx.fillRect(0, 0, 1280, 446); ctx.restore();
@@ -140,12 +143,25 @@
       ctx.fillStyle = g; ctx.fillRect(0, 0, 1280, 446);
       Art.glow(ctx, 640, 470, 640, 'rgba(255,170,90,0.16)', 1);
       // 四本の糸: a lifted hero (st.lift: hero ids) hangs from a golden string, feet off the floor
-      const lifted = (st && st.lift) || [];
+      const lifted = this.limp || (st && st.lift) || [];
       for (const h of this.heroList()) {
         const on = lifted.indexOf(h.id) >= 0;
         h.liftK = (h.liftK || 0) + ((on ? 1 : 0) - (h.liftK || 0)) * 0.12;
         if (h.liftK < 0.01) h.liftK = 0;
-        h.dy = -20 * h.liftK + (h.liftK > 0.5 ? Math.sin(this.time * 2.2 + h.x * 0.01) * 2 : 0);
+        const lp = this.limp ? 1 : 0; // (the party fell: hung up high, swaying like puppets)
+        h.dy = -(20 + 50 * lp) * h.liftK + (h.liftK > 0.5 ? Math.sin(this.time * (2.2 - lp) + h.x * 0.01) * (2 + 5 * lp) : 0);
+      }
+      // 最深の間: golden strings coming down from the flies (before the puppeteer's hands follow them)
+      if (this.drop) {
+        ctx.save(); ctx.lineCap = 'round';
+        this.drop.xs.forEach((x, i) => {
+          const k = this.drop.k[i] || 0; if (k <= 0) return;
+          const y = this.drop.y * k;
+          ctx.strokeStyle = 'rgba(255,210,87,0.25)'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, y); ctx.stroke();
+          ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1.8; ctx.stroke();
+          Art.glow(ctx, x, y, 18, 'rgba(255,214,120,0.9)', 0.8);
+        });
+        ctx.restore();
       }
       // actors (enemy behind heroes' layer order doesn't matter much: they don't overlap)
       if (this.enemy) drawActor(ctx, this.enemy, this.time);
@@ -160,7 +176,7 @@
         ctx.restore();
       }
       if (st && st.drawWorldFx) st.drawWorldFx(ctx);
-      if (Art.drawForeground) Art.drawForeground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth });
+      if (Art.drawForeground) Art.drawForeground(ctx, this.zone, { t: this.time, camX: this.camX, W: 1280, H: 446, depth: this.depth, act: this.act(), actK: this.actK, collapse: this.collapse });
       ctx.restore();
     }
 

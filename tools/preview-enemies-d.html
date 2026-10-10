@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Emberwheel Enemies D Preview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #0d0b16; --fg: #e8dcc0; --muted: #8a80a8; --cell: #17142a; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; }
+  header { padding: 10px 16px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; position: sticky; top: 0; background: rgba(13,11,22,0.92); z-index: 2; }
+  header select, header input { background: #231f3d; color: var(--fg); border: 1px solid #3a3460; border-radius: 4px; }
+  section { padding: 4px 16px 10px; }
+  h2 { font-size: 14px; margin: 8px 0 6px; color: #ffd257; font-weight: 600; }
+  h2 span { color: var(--muted); font-weight: 400; margin-left: 10px; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cell { background: var(--cell); border-radius: 6px; overflow: hidden; }
+  .cell div { text-align: center; color: var(--muted); font-size: 11px; padding: 2px 0 4px; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<header>
+  <strong>EMBERWHEEL — enemies D (深淵の繰り手 B17)</strong>
+  <label>show <select id="only"><option value="">all</option></select></label>
+  <label>zoom <select id="zoom"><option>0.5</option><option selected>0.75</option><option>1</option><option>1.5</option></select></label>
+  <label>speed <select id="spd"><option value="1">1x</option><option value="0.35">0.35x</option><option value="0">pause</option></select></label>
+  <label><input type="checkbox" id="guides"> info guides</label>
+  <span style="color:var(--muted)">one-shot poses loop p over 1.2s (die over 3s) · ?only=act1&amp;z=1&amp;i=0,2 (cells)&amp;p=0.4&amp;t=3 freezes</span>
+</header>
+<main id="main"></main>
+<script src="../js/art/art_core.js"></script>
+<script src="../js/art/enemies_d.js"></script>
+<script>
+(function () {
+  const Art = SD.Art;
+  const ACTS = ['糸の段', '面の段', '祈りの段', '終幕の段'];
+  const POSES = [['idle', '待機（糸を手繰る）'], ['windup', '吊り上げ'], ['attack', '落とし'], ['cast', '糸を張る'], ['stance', '構え'], ['hit', '怯み']];
+  const GROUPS = ACTS.map((name, i) => ({
+    key: 'act' + (i + 1), id: 'kurite', title: `kurite 深淵の繰り手 — ${i + 1}. ${name}（切れた糸 ${i} 本）`,
+    cells: POSES.map(([p, l]) => ({ pose: p, opts: { phase: i + 1 }, label: l })).concat(i === 3 ? [{ pose: 'die', opts: { phase: 4 }, label: '倒れる' }] : []),
+  }));
+  const ONE_SHOT = { attack: 1.2, hit: 1.2, die: 3 };
+  const qs = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  for (const g of GROUPS) { const o = document.createElement('option'); o.value = g.key; o.textContent = g.key; $('only').appendChild(o); }
+  $('only').value = qs.get('only') || '';
+  if (qs.get('z')) $('zoom').value = qs.get('z');
+  $('guides').checked = qs.get('g') === '1';
+  if (qs.get('spd')) $('spd').value = qs.get('spd');
+  const fixedP = qs.has('p') ? +qs.get('p') : null, fixedT = qs.has('t') ? +qs.get('t') : null;
+  const pick = qs.get('i') ? qs.get('i').split(',').map(Number) : null;
+  let cells = [];
+  // the cell is the stage around the boss: its feet 260 px from the right edge, the strings running off to the left
+  const W = 760, H = 500, FX = W - 260, FY = H - 30;
+  function build() {
+    const main = $('main'); main.innerHTML = ''; cells = [];
+    const z = +$('zoom').value, only = $('only').value;
+    for (const g of GROUPS) {
+      if (only && only !== g.key) continue;
+      const info = Art.enemyInfo(g.id);
+      const sec = document.createElement('section');
+      sec.innerHTML = '<h2>' + g.title + '<span>h ' + info.height + ' · w ' + info.width + (Art.enemies[g.id] ? '' : ' · NOT REGISTERED') + '</span></h2>';
+      const row = document.createElement('div'); row.className = 'row'; sec.appendChild(row);
+      for (let ci = 0; ci < g.cells.length; ci++) {
+        const c = g.cells[ci];
+        if (pick && pick.indexOf(ci) < 0) continue;
+        const el = document.createElement('div'); el.className = 'cell';
+        const cv = document.createElement('canvas'); const dpr = window.devicePixelRatio || 1;
+        cv.width = W * z * dpr; cv.height = H * z * dpr; cv.style.width = W * z + 'px'; cv.style.height = H * z + 'px';
+        const lab = document.createElement('div'); lab.textContent = c.label;
+        el.appendChild(cv); el.appendChild(lab); row.appendChild(el);
+        cells.push(Object.assign({ id: g.id, cv, lab, ctx: cv.getContext('2d'), z, dpr, info }, c));
+      }
+      main.appendChild(sec);
+    }
+  }
+  ['zoom', 'only'].forEach((k) => $(k).addEventListener('change', build));
+  build();
+  let simT = 0, last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    simT += dt * +$('spd').value;
+    const t = fixedT != null ? fixedT : simT;
+    for (const c of cells) {
+      const ctx = c.ctx, s = c.z * c.dpr;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.cv.width, c.cv.height);
+      ctx.setTransform(s, 0, 0, s, 0, 0);
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#0b0814'); g.addColorStop(0.75, '#1d1830'); g.addColorStop(1, '#17142a');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = 'rgba(58,52,96,0.6)'; ctx.fillRect(0, FY, W, H - FY);
+      // the stage top (where the curtain hangs in the game): 376 px above the feet
+      ctx.fillStyle = 'rgba(120,30,50,0.55)'; ctx.fillRect(0, 0, W, Math.max(0, FY - 376));
+      const len = ONE_SHOT[c.pose];
+      const p = fixedP != null ? fixedP : (len ? Math.min(1, (t % (len + 0.4)) / len) : 0);
+      ctx.save(); ctx.translate(FX, FY);
+      Art.drawEnemy(ctx, c.id, c.pose, Object.assign({ t, p }, c.opts));
+      ctx.restore();
+      if ($('guides').checked) {
+        ctx.save(); ctx.translate(FX, FY);
+        ctx.strokeStyle = 'rgba(125,240,180,0.6)'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+        ctx.strokeRect(-c.info.width / 2, -c.info.height, c.info.width, c.info.height);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ff4f5e'; ctx.beginPath(); ctx.arc(c.info.fx[0], c.info.fx[1], 4, 0, 7); ctx.fill();
+        ctx.fillStyle = '#6fd3ff'; ctx.beginPath(); ctx.arc(c.info.head[0], c.info.head[1], 4, 0, 7); ctx.fill();
+        ctx.restore();
+      }
+      if (len && fixedP == null) c.lab.textContent = c.label + '  p=' + p.toFixed(2);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

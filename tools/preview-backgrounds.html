@@ -38,6 +38,7 @@
 
 <script src="../js/art/art_core.js"></script>
 <script src="../js/art/backgrounds.js"></script>
+<script src="../js/art/backdrop_deepest.js"></script>
 <script>
 (function () {
   const Art = SD.Art;
@@ -48,6 +49,10 @@
     ['abyss', '灰輪の座 abyss (boss arena)', 440],
     ['camp', '野営地 camp (720)', 720],
     ['title', 'タイトル title (720)', 720],
+    ['deepest', '最深の間 deepest — 1 糸の段 (B17)', 446, 1],
+    ['deepest', '最深の間 deepest — 2 面の段', 446, 2],
+    ['deepest', '最深の間 deepest — 3 祈りの段', 446, 3],
+    ['deepest', '最深の間 deepest — 4 終幕の段', 446, 4],
   ];
   const q = new URLSearchParams(location.search);
   const st = {
@@ -77,14 +82,14 @@
     tabs.appendChild(b);
   };
   mkTab('all', 'All');
-  ZONES.forEach(([id]) => mkTab(id, id));
+  ZONES.forEach(([id], i) => { if (ZONES.findIndex((z) => z[0] === id) === i) mkTab(id, id); });
 
   let views = [];
   function build() {
     for (const b of tabs.children) b.classList.toggle('on', b.dataset.id === st.sel);
     const list = $('list'); list.innerHTML = '';
     views = [];
-    for (const [id, label, H] of ZONES) {
+    for (const [id, label, H, act] of ZONES) {
       if (st.sel !== 'all' && st.sel !== id) continue;
       const wrap = document.createElement('div'); wrap.className = 'zone';
       const h = document.createElement('h3'); h.textContent = label;
@@ -98,7 +103,7 @@
         cv.style.imageRendering = 'pixelated';
         cv.style.transform = 'scale(' + z + ') translate(' + -zx + 'px,' + -zy + 'px)';
       }
-      views.push({ id, H, ctx: cv.getContext('2d'), info, ms: 0 });
+      views.push({ id, H, act, ctx: cv.getContext('2d'), info, ms: 0 });
     }
   }
   build();
@@ -145,9 +150,9 @@
       const ctx = v.ctx, t0 = performance.now();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, 1280, v.H);
-      const opts = { t, camX: v.id === 'abyss' ? camX * 0.25 : camX, W: 1280, H: v.H, depth: st.depth };
+      const opts = { t, camX: v.id === 'abyss' ? camX * 0.25 : camX, W: 1280, H: v.H, depth: st.depth, act: v.act };
       Art.drawBackground(ctx, v.id, opts);
-      if (st.actors && v.H === 440) standIns(ctx, t);
+      if (st.actors && (v.H === 440 || v.id === 'deepest')) standIns(ctx, t);
       if (st.fg) Art.drawForeground(ctx, v.id, opts);
       const ms = performance.now() - t0;
       v.ms = v.ms * 0.9 + ms * 0.1;
